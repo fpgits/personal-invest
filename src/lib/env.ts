@@ -39,7 +39,18 @@ export const env = {
     return opt("COINGECKO_API_KEY");
   },
   get authHash() {
-    return req("AUTH_PASSWORD_HASH");
+    const raw = req("AUTH_PASSWORD_HASH").trim().replace(/^["']+|["']+$/g, "");
+    /*
+     * Si el valor no tiene forma de hash (scrypt:salt:hash), fallar ruidoso:
+     * sin esto, una contrasena en claro o un pegado a medias en la env var
+     * produce un 401 identico al de "contrasena incorrecta" y es indebugeable.
+     */
+    if (!/^scrypt[:$][A-Za-z0-9+/=]+[:$][A-Za-z0-9+/=]+$/.test(raw)) {
+      throw new Error(
+        "AUTH_PASSWORD_HASH no es un hash valido. Causas tipicas: pusiste la contrasena en claro, el pegado quedo incompleto, o el hash es del formato viejo con $ (el runtime expande $ y lo corrompe). Regeneralo con `npm run hash-password`, reemplaza la env var en Vercel y redeploy.",
+      );
+    }
+    return raw;
   },
   get authSecret() {
     return req("AUTH_SECRET");

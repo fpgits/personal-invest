@@ -17,8 +17,19 @@ export function hashPassword(password: string): string {
   return `scrypt:${salt.toString("base64")}:${derived.toString("base64")}`;
 }
 
+/**
+ * Normaliza el valor tal como suele llegar desde un dashboard de env vars:
+ * espacios o saltos de linea alrededor, comillas envolventes de un copy-paste,
+ * y el separador "$" del formato antiguo del script (hoy es ":").
+ */
+export function normalizeStoredHash(stored: string): string {
+  return stored.trim().replace(/^["']+|["']+$/g, "");
+}
+
 export function verifyPassword(password: string, stored: string): boolean {
-  const [algo, saltB64, hashB64] = stored.trim().split(":");
+  const cleaned = normalizeStoredHash(stored);
+  const parts = cleaned.split(cleaned.includes(":") ? ":" : "$");
+  const [algo, saltB64, hashB64] = parts;
   if (algo !== "scrypt" || !saltB64 || !hashB64) return false;
 
   const expected = Buffer.from(hashB64, "base64");
