@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": [
+    "fra1"
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/prices",
+      "schedule": "*/15 13-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/sync",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/snapshot",
+      "schedule": "5 22 * * *"
+    },
+    {
+      "path": "/api/cron/news",
+      "schedule": "0 */4 * * *"
+    }
+  ]
+}

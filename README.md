@@ -1,106 +1,263 @@
-# personal-invest
+# Vault
 
-Monorepo personal de Fernando: un vault donde va entrando, modulo a modulo,
-toda la vida en un sitio. Un solo login para todo.
+El portal personal de Fernando: una sola app, un solo login, y dentro las
+secciones de su vida. La primera es **Invest** (`/invest`): cartera con P&L,
+watchlist, analisis con IA y noticias resumidas.
 
-## Modulos
+Un solo usuario. No es multi-tenant y no pretende serlo.
 
-| Carpeta | Que es | Deploy |
+## Como esta organizado
+
+- `/login` es la unica puerta. Sin sesion, el guardian (`src/proxy.ts`) manda
+  ahi. Con sesion, la raiz `/` muestra el home con una tarjeta por seccion.
+- Cada seccion vive bajo su ruta: `src/app/invest/*` con su layout propio.
+  Anadir la siguiente seccion es crear su carpeta en `src/app/` y su tarjeta
+  en `src/app/page.tsx`. Nada mas: mismo login, mismo deploy, misma DB o la
+  suya propia.
+- El auth vive en `src/lib/vault/` (sesion JWT, scrypt, rate limit) y el
+  cableado en `src/lib/auth.ts`.
+
+## Stack
+
+| Pieza | Que se usa | Por que |
 |---|---|---|
-| `home/` | El portal: la puerta del vault. Login unico y home con una tarjeta por modulo. Proxyea cada modulo bajo su ruta | Vercel, Root Directory = `home`. Es el dominio principal |
-| `invest/` | Inversiones: cartera con P&L, watchlist, analisis con IA y noticias. Se sirve como zona bajo `/invest` | Vercel, Root Directory = `invest` |
-| `packages/auth/` | Auth compartido del vault: sesion JWT, hash de contrasena (scrypt) y rate limit de login | No se deploya; se importa |
+| Framework | Next.js 16 (App Router) + React 19 | RSC para las paginas pesadas de datos, route handlers para el resto |
+| Base de datos | Turso (libSQL) + Drizzle ORM | Lo pediste. SQLite serverless encaja bien: el volumen es pequeno y casi todas las lecturas son por clave |
+| IA | OpenRouter via AI SDK v7 | Lo pediste. El modelo se elige en `/ajustes` sin redesplegar |
+| Precios de bolsa | Finnhub | Free tier: 60 req/min, US en tiempo real, uso personal |
+| Precios de cripto | CoinGecko | Free: 5-15 req/min sin key, 30 con demo key gratis |
+| Sync de exchanges | ccxt | Una integracion, ~100 exchanges. Binance incluido |
+| Sync de broker | IBKR Flex Web Service | La unica API de IBKR que funciona sin TWS ni IB Gateway corriendo |
+| Graficos | Recharts | Paleta validada para daltonismo, ver `src/components/charts.tsx` |
+| Deploy | Vercel | Lo pediste. Los cron de `vercel.json` mueven precios, sync, snapshots y noticias |
 
-## Arquitectura: todo debajo del login
+Auth: `src/lib/vault/`: contrasena unica con scrypt, JWT en cookie httpOnly
+`__Secure-vault_session` y rate limit de login en DB (10 fallos por IP cada
+15 min). Sin OAuth, sin tabla de usuarios, sin proveedor externo. Un login
+para todo el vault.
 
-El portal es el unico dominio que visitas. Su raiz es el home con las
-tarjetas; sin sesion, el guardian te manda a `/login`. Cada modulo corre como
-proyecto propio de Vercel pero se sirve A TRAVES del portal (multi-zona):
-`/invest/*` se proxyea al deployment de invest, que esta construido con
-`basePath: "/invest"`.
+## Puesta en marcha
 
-Como todo se sirve bajo un solo dominio, la cookie de sesion del portal cubre
-el vault completo: un login, todo dentro. Funciona ya en *.vercel.app, sin
-esperar dominio propio. Y el acceso directo a la URL del deployment de un
-modulo rebota al login del portal (`AUTH_LOGIN_URL`), asi que no hay puerta
-trasera.
+```bash
+npm install
+cp .env.example .env.local
+npm run hash-password -- "tu-clave-de-12-o-mas"   # imprime todos los secretos
+npm run db:push                                    # crea las tablas en Turso
+npm run dev
+```
 
-Cada modulo es autocontenido (su package.json, su DB, su README), pero el
-login es uno solo: misma contrasena, misma cookie, mismo formato de sesion.
+### Variables de entorno
 
-## Como funciona el login compartido
+Las primeras son obligatorias; sin ellas la app arranca pero muestra una
+pantalla diciendo exactamente que falta.
 
-`packages/auth` (`@vault/auth`) contiene todo el auth. Cada modulo lo importa
-via npm workspaces y le cablea su base de datos para el rate limit. Las tres
-piezas que lo hacen "un solo login":
+| Variable | Obligatoria | De donde sale |
+|---|---|---|
+| `TURSO_DATABASE_URL` | si | Panel de Turso, empieza por `libsql://` |
+| `TURSO_AUTH_TOKEN` | si | `turso db tokens create personal-invest` |
+| `AUTH_PASSWORD_HASH` | si | `npm run hash-password -- "tu-clave"` |
+| `AUTH_SECRET` | si | `openssl rand -base64 32` |
+| `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
+| `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |
+| `FINNHUB_API_KEY` | no | finnhub.io/register. Sin esto no hay precios de acciones |
+| `COINGECKO_API_KEY` | no | Opcional, sube el limite de 5-15 a 30 req/min |
+| `CRON_SECRET` | no | `openssl rand -hex 32`. Vercel lo manda como `Authorization: Bearer` |
 
-- `AUTH_PASSWORD_HASH`: el hash de TU contrasena. El mismo valor en las env
-  vars de todos los proyectos de Vercel.
-- `AUTH_SECRET`: firma las sesiones. El mismo valor en todos los proyectos;
-  es lo que hace que una sesion emitida por un modulo la acepte otro.
-- Cookie `__Secure-vault_session` (en produccion), con el mismo nombre en
-  todos los modulos.
+`ENCRYPTION_KEY` cifra las API keys de los exchanges. **Si la cambias, las
+cuentas guardadas dejan de descifrarse y hay que volver a meterlas.**
 
-Estado actual y futuro:
+## Como entran los datos
 
-- **Hoy, en \*.vercel.app**: cada modulo pide login una vez, con la misma
-  contrasena. Las sesiones no se comparten entre modulos porque el navegador
-  no permite cookies de dominio compartido en vercel.app (esta en la Public
-  Suffix List). Es una limitacion del dominio, no del codigo.
-- **Con dominio propio**: pones cada modulo en un subdominio
-  (invest.tudominio.com, notas.tudominio.com), anades
-  `AUTH_COOKIE_DOMAIN=".tudominio.com"` a todos los proyectos, y el login
-  pasa a ser una sola sesion para todo el vault. El codigo ya lo soporta.
+Tres vias, y se pueden mezclar:
 
-## Seguridad
+1. **Interactive Brokers, automatico.** En `/cuentas`, pestana Broker. Usa el
+   Flex Web Service: token mas Query ID, dos llamadas HTTPS, sin gateway.
+2. **Exchanges de cripto, automatico.** Binance, Bybit, Kraken, OKX, KuCoin,
+   Coinbase, Bitget, MEXC, Gate.io y Crypto.com, con API key **de solo
+   lectura**. Solo se llama a `fetchBalance` y `fetchMyTrades`.
+3. **CSV o a mano.** En `/cartera`, para cualquier cosa que no cubran los dos
+   anteriores. El CSV reconoce cabeceras en ingles y espanol, fechas europeas y
+   americanas, y numeros con coma o punto decimal.
 
-- Contrasena nunca almacenada: scrypt con salt, comparacion en tiempo
-  constante. El hash va en env vars, nunca en el repo.
-- Rate limit de login persistido en la DB del modulo: 10 fallos por IP cada
-  15 minutos (responde 429). En serverless un contador en memoria no limita
-  nada; por eso vive en la base de datos.
-- Cookie httpOnly + Secure + SameSite=Lax con prefijo `__Secure-` en
-  produccion.
-- Headers en todas las respuestas: X-Frame-Options DENY, nosniff,
-  Referrer-Policy, HSTS.
-- Secretos de terceros (API keys de exchanges) cifrados con AES-256-GCM
-  antes de tocar la DB.
+El cron `/api/cron/sync` repite 1 y 2 cada 6 horas.
 
-## Crear el siguiente modulo
+### Interactive Brokers: por que Flex y no la API "normal"
 
-1. Crea la carpeta (`notas/`, por ejemplo) con su app Next.js; `workspaces`
-   en el package.json raiz ya cubre las carpetas de primer nivel que anadas
-   a la lista.
-2. En su package.json: `"@vault/auth": "*"`. En su next.config:
-   `basePath: "/notas"`, `transpilePackages: ["@vault/auth"]` y
-   `turbopack: { root: path.join(__dirname, "..") }`.
-3. Copia de invest el cableado fino: `src/lib/auth.ts`, `src/proxy.ts` (con
-   el redirect a `AUTH_LOGIN_URL`) y el helper `api()` para los fetch de
-   client components. La logica vive en `packages/auth`.
-4. En el portal: anade la tarjeta en `home/src/app/page.tsx` (lista
-   `MODULES`) y el rewrite en `home/next.config.ts` con su env
-   (`NOTAS_URL`, siguiendo el patron de `INVEST_URL`).
-5. Nuevo proyecto en Vercel sobre este mismo repo, Root Directory = la
-   carpeta nueva, mismas `AUTH_*` env vars, y `AUTH_LOGIN_URL` apuntando al
-   login del portal. Luego redeploy del portal (los rewrites se fijan en
-   build).
+IBKR tiene tres APIs y dos no sirven aqui:
 
-## Deploy en Vercel
+- **TWS API**: exige TWS o IB Gateway corriendo en una maquina, con socket
+  abierto y sesion viva. Imposible en una funcion serverless.
+- **Client Portal API**: exige el gateway local y reautenticacion cada 24h.
+  Mismo problema.
+- **Flex Web Service**: token mas Query ID, dos llamadas HTTPS, sin sesion.
+  Es la que usa la app.
 
-Dos proyectos sobre este mismo repo, en este orden:
+Montarlo en Client Portal:
 
-1. **invest**: Root Directory = `invest`. Sus env vars de siempre, mas
-   `AUTH_LOGIN_URL` = `https://<portal>.vercel.app/login` (se puede anadir
-   despues del paso 2 y redeployar). Anota su URL de produccion.
-2. **home** (el portal, tu dominio principal): Root Directory = `home`.
-   Env vars: `AUTH_PASSWORD_HASH` y `AUTH_SECRET` (los mismos de invest),
-   `TURSO_DATABASE_URL` y `TURSO_AUTH_TOKEN` (para el rate limit del login) e
-   `INVEST_URL` = la URL de produccion de invest, sin barra final.
+1. **Performance & Reports** y luego **Flex Queries**.
+2. Crea una **Activity Flex Query** con al menos **Trades** y **Open
+   Positions**. Anade **Cash Transactions** si quieres que entren los
+   dividendos. Formato XML.
+3. Apunta el **Query ID**.
+4. En el engranaje de **Flex Web Service**, activalo y genera un token.
+   **No le pongas restriccion por IP**: las funciones de Vercel no tienen IP
+   fija y el token fallaria con el error 1013.
 
-Los rewrites del portal se fijan en build: si cambias `INVEST_URL`, redeploy
-del portal. Los cron de invest apuntan a `/invest/api/cron/*` (con el
-basePath) y los dispara Vercel directo contra el proyecto invest.
+Limites de IBKR: 1 peticion por segundo y 10 por minuto por token. La app
+espera y reintenta mientras el informe se genera (errores 1009 y 1019).
 
-La opcion "Include source files outside of the Root Directory" (activada por
-defecto) es la que permite que cada build vea `packages/auth`. `npm install`
-se corre en la RAIZ del repo: el lockfile vive aqui.
+Lo que la Flex Query no cubre todavia: opciones, futuros y forex. El sync los
+cuenta y te dice cuantas filas salto, en vez de meterlos mal.
+
+### Binance y el bloqueo por region
+
+Binance devuelve **HTTP 451** a las IPs de Estados Unidos, y las funciones de
+Vercel corren por defecto en `iad1` (Washington). Por eso `vercel.json` fija
+`"regions": ["fra1"]` (Frankfurt).
+
+Dos consecuencias:
+
+- En el plan Hobby solo se puede elegir **una** region, asi que todas las
+  funciones corren en Frankfurt.
+- Tu base de datos Turso esta en `aws-us-east-1`. Frankfurt a Virginia son unos
+  90ms de ida y vuelta por consulta. Para un dashboard personal se nota poco,
+  pero si quieres quitarlo, mueve la DB a un grupo europeo de Turso: esta
+  vacia, recrearla no cuesta nada.
+
+Tampoco pongas whitelist de IP en la API key de Binance, por la misma razon que
+en IBKR: las IPs de salida de Vercel cambian.
+
+### Sobre el coste de entrada en las reconciliaciones
+
+Si el saldo que reporta la fuente no cuadra con las operaciones importadas, la
+app crea un ajuste en vez de callarse:
+
+- **IBKR** si da el coste medio en Open Positions, asi que el ajuste entra con
+  su coste real.
+- **Los exchanges no**, asi que ahi el ajuste entra con **precio 0**. Eso hace
+  que ese trozo aparezca como 100% de ganancia latente, que es lo honesto: no
+  sabemos a cuanto entro. Editalo a mano si lo sabes.
+
+## P&L
+
+Dos metodos, se cambia en `/ajustes` y recalcula todo el historico al momento:
+
+- **Coste medio** (por defecto): cada compra recalcula el medio, las ventas
+  realizan contra ese medio.
+- **FIFO**: se mantienen lotes y las ventas consumen los mas antiguos primero.
+
+Las comisiones suman al coste en las compras y restan del ingreso en las ventas.
+Los dividendos se acumulan aparte y no tocan la cantidad. Un `transfer_out` no
+realiza P&L: el activo sigue siendo tuyo, solo cambio de sitio.
+
+El motor tiene tests con cifras calculadas a mano, y el parser de IBKR tiene
+los suyos con XML de ejemplo con la forma real que devuelve Flex:
+
+```bash
+npm run test        # los dos
+npm run test:pnl
+npm run test:ibkr
+```
+
+## Deploy
+
+Un solo proyecto de Vercel (`personal-invest`) apuntando a la raiz del repo.
+**Root Directory vacio** (el valor por defecto): la app vive en la raiz.
+
+## Cron de Vercel
+
+Definidos en `vercel.json`. Necesitan `CRON_SECRET` o devuelven 401.
+
+| Ruta | Cuando | Que hace |
+|---|---|---|
+| `/api/cron/prices` | cada 15 min, 13-21h L-V | Refresca precios (horario de mercado US en UTC) |
+| `/api/cron/sync` | cada 6 h | Sincroniza los exchanges conectados |
+| `/api/cron/snapshot` | 22:05 diario | Guarda la foto del dia. **Sin esto no hay grafico historico** |
+| `/api/cron/news` | cada 4 h | Trae titulares y los resume con el modelo rapido |
+
+Estos horarios (cada 15 min, cada 4h, cada 6h) requieren el plan Pro de
+Vercel. En Hobby, cualquier cron mas frecuente que diario hace fallar el
+deploy; si algun dia bajas a Hobby, deja los cuatro pero en version diaria.
+
+### Refinamiento opcional en Pro
+
+Con Pro se pueden fijar regiones por funcion. Lo optimo seria: todo en `iad1`
+(pegado a Turso) y solo las rutas que llaman a Binance en `fra1`. No viene
+activado porque el patron de `functions` en vercel.json no se puede verificar
+sin desplegar; si quieres probarlo despues del primer deploy verde:
+
+```json
+"regions": ["iad1"],
+"functions": {
+  "src/app/api/cron/sync/route.ts": { "regions": ["fra1"] },
+  "src/app/api/accounts/*/sync/route.ts": { "regions": ["fra1"] },
+  "src/app/api/accounts/*/test/route.ts": { "regions": ["fra1"] }
+}
+```
+
+Si el build se queja de que el patron no coincide, quitalo y vuelve al
+`"regions": ["fra1"]` global, que funciona seguro.
+
+## Sobre la IA
+
+Los prompts (`src/lib/ai/prompts.ts`) estan escritos para que el modelo analice,
+no para que recomiende. No dice que comprar ni que vender; describe
+concentracion, riesgo y lo que no puede saber. Si le pides una tesis, escribe el
+caso bajista tan fuerte como el alcista a proposito.
+
+El catalogo de OpenRouter cambia cada semana, asi que no hay modelos
+hardcodeados: `/ajustes` lee la lista en vivo y guarda tu eleccion en la base de
+datos.
+
+## Comandos
+
+```bash
+npm run dev            # desarrollo
+npm run build          # build de produccion
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint
+npm run test:pnl       # tests del motor de P&L
+npm run db:generate    # genera migracion SQL desde el schema
+npm run db:push        # aplica el schema a Turso
+npm run db:studio      # explorador de la base de datos
+npm run hash-password  # genera AUTH_PASSWORD_HASH y los demas secretos
+```
+
+## Estructura
+
+```
+src/
+  app/
+    (app)/        paginas con sesion: resumen, cartera, watchlist,
+                  noticias, analisis, cuentas, ajustes
+    api/          route handlers, incluidos los cron
+    login/
+  components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
+  db/             schema.ts (12 tablas) y cliente perezoso de libsql
+  lib/
+    portfolio.ts  motor de P&L, con tests
+    market/       finnhub.ts, coingecko.ts y el router entre ambos
+    sync.ts       enruta cada cuenta a su integracion
+    exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
+    brokers/      ibkr.ts (Flex Web Service) y sync.ts (bolsa)
+    ai/           client.ts, context.ts, prompts.ts
+    crypto.ts     AES-256-GCM para las API keys, scrypt para la contrasena
+    csv.ts        parser tolerante de CSV de brokers
+  proxy.ts        guarda de sesion (antes middleware.ts)
+```
+
+## Limites conocidos
+
+- La moneda base es una etiqueta, no convierte. Todo se valora en USD.
+- Las velas historicas de acciones estan capadas en el free tier de Finnhub, asi
+  que el grafico de la cartera sale de los snapshots diarios propios y necesita
+  un par de dias para tener forma.
+- El sync de cripto prueba los pares mas comunes (USDT, USD, USDC, EUR, BTC).
+  Si operaste en un par raro, ese trade entra por la reconciliacion de balance
+  con coste desconocido.
+- De IBKR se importan acciones y fondos. Opciones, futuros y forex se saltan y
+  se reportan, no se importan mal.
+- Las operaciones en moneda distinta de USD se guardan con su moneda, pero la
+  valoracion sigue siendo en USD.
+- No hay alertas por email ni push todavia. La watchlist guarda el precio
+  objetivo pero no notifica.
