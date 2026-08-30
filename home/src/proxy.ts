@@ -2,9 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { sessionCookieName, verifySessionToken } from "@vault/auth/session";
 
 /**
- * Guarda de sesion del modulo, sobre el auth compartido del monorepo.
- * Las rutas /api se protegen ellas mismas con requireAuth, porque deben
- * responder 401 en JSON en vez de redirigir.
+ * La puerta del vault: todo lo que no sea /login exige sesion.
+ * Las rutas /api se protegen ellas mismas.
  */
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -19,15 +18,9 @@ export async function proxy(req: NextRequest) {
     (await verifySessionToken(token!, process.env.AUTH_SECRET!));
 
   if (!valid && !isLogin) {
-    // En produccion el login vive en el portal del vault, no aqui.
-    const portalLogin = process.env.AUTH_LOGIN_URL;
-    if (portalLogin) {
-      return NextResponse.redirect(new URL(portalLogin));
-    }
-    // Fallback para desarrollo local sin portal levantado.
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", pathname);
+    if (pathname !== "/") url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
@@ -43,9 +36,6 @@ export async function proxy(req: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Todo menos: rutas de api, estaticos de next, favicon y assets publicos.
-     */
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|invest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

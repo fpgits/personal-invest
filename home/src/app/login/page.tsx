@@ -3,7 +3,6 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { LockKeyhole } from "lucide-react";
-import { api } from "@/lib/utils";
 
 function LoginForm() {
   const router = useRouter();
@@ -17,7 +16,7 @@ function LoginForm() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(api("/api/auth/login"), {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ password }),
@@ -28,7 +27,9 @@ function LoginForm() {
         setBusy(false);
         return;
       }
-      router.replace(params.get("next") || "/");
+      const next = params.get("next");
+      // Solo rutas internas: nada de redirigir fuera del vault.
+      router.replace(next && next.startsWith("/") ? next : "/");
       router.refresh();
     } catch {
       setError("Error de red");
@@ -42,8 +43,8 @@ function LoginForm() {
         <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-surface">
           <LockKeyhole size={18} className="text-accent" />
         </div>
-        <h1 className="text-xl font-semibold">Inversiones</h1>
-        <p className="mt-1 text-sm text-muted">Tu cartera de bolsa y cripto</p>
+        <h1 className="text-xl font-semibold">Vault</h1>
+        <p className="mt-1 text-sm text-muted">Tu espacio. Una sola llave.</p>
       </div>
 
       <label className="mb-2 block text-sm text-muted" htmlFor="password">
@@ -59,7 +60,7 @@ function LoginForm() {
         className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm outline-none transition focus:border-accent"
       />
 
-      {error && <p className="mt-3 text-sm text-down">{error}</p>}
+      {error && <p className="mt-3 text-sm text-warn">{error}</p>}
 
       <button
         type="submit"

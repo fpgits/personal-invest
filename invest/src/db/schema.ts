@@ -229,6 +229,13 @@ export const syncRuns = sqliteTable(
   (t) => [index("sync_runs_account_idx").on(t.accountId, t.startedAt)],
 );
 
+/** Intentos de login fallidos por IP, para el rate limit del auth compartido. */
+export const authAttempts = sqliteTable("auth_attempts", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  windowStart: integer("window_start").notNull(),
+});
+
 export type Asset = typeof assets.$inferSelect;
 export type Account = typeof accounts.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;

@@ -15,7 +15,7 @@ import {
   Star,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { api, cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/", label: "Resumen", icon: LayoutDashboard },
@@ -33,7 +33,7 @@ export function Nav() {
   const [open, setOpen] = useState(false);
 
   async function signOut() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch(api("/api/auth/logout"), { method: "POST" });
     router.replace("/login");
     router.refresh();
   }

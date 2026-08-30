@@ -5,6 +5,7 @@ import { Bot, FileText, Send, ShieldAlert, User } from "lucide-react";
 import { AssetSearch } from "@/components/asset-search";
 import { Card, PageTitle } from "@/components/ui";
 import type { SearchHit } from "@/lib/market/types";
+import { api } from "@/lib/utils";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -74,7 +75,7 @@ function Chat() {
     setStreaming(true);
 
     try {
-      const res = await fetch("/api/ai/chat", {
+      const res = await fetch(api("/api/ai/chat"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: text, threadId }),
@@ -199,7 +200,7 @@ function RiskPanel() {
   async function run() {
     setBusy(true);
     setError(null);
-    const res = await fetch("/api/ai/risk", { method: "POST" });
+    const res = await fetch(api("/api/ai/risk"), { method: "POST" });
     const data = await res.json();
     setBusy(false);
     if (!res.ok) {
@@ -244,7 +245,7 @@ function ThesisPanel() {
     setThesis(null);
     setSaved(false);
     setBusy(true);
-    const res = await fetch("/api/ai/thesis", {
+    const res = await fetch(api("/api/ai/thesis"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ symbol: hit.symbol, assetClass: hit.assetClass }),
@@ -256,7 +257,7 @@ function ThesisPanel() {
 
   async function save() {
     if (!asset || !thesis) return;
-    await fetch("/api/ai/thesis", {
+    await fetch(api("/api/ai/thesis"), {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

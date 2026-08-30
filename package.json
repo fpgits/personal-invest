@@ -2,12 +2,14 @@
   "name": "personal-invest",
   "private": true,
   "workspaces": [
+    "home",
     "invest",
     "packages/*"
   ],
   "scripts": {
     "dev": "npm run dev -w invest",
-    "build": "npm run build -w invest",
+    "dev:home": "npm run dev -w home",
+    "build": "npm run build -w invest && npm run build -w home",
     "test": "npm run test -w invest"
   }
 }

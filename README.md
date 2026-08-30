@@ -7,8 +7,23 @@ toda la vida en un sitio. Un solo login para todo.
 
 | Carpeta | Que es | Deploy |
 |---|---|---|
-| `invest/` | Inversiones: cartera con P&L, watchlist, analisis con IA y noticias. Next.js + Turso + OpenRouter | Vercel, Root Directory = `invest` |
-| `packages/auth/` | Auth compartido del vault: sesion JWT, hash de contrasena (scrypt) y rate limit de login. Lo consumen todos los modulos | No se deploya; se importa |
+| `home/` | El portal: la puerta del vault. Login unico y home con una tarjeta por modulo. Proxyea cada modulo bajo su ruta | Vercel, Root Directory = `home`. Es el dominio principal |
+| `invest/` | Inversiones: cartera con P&L, watchlist, analisis con IA y noticias. Se sirve como zona bajo `/invest` | Vercel, Root Directory = `invest` |
+| `packages/auth/` | Auth compartido del vault: sesion JWT, hash de contrasena (scrypt) y rate limit de login | No se deploya; se importa |
+
+## Arquitectura: todo debajo del login
+
+El portal es el unico dominio que visitas. Su raiz es el home con las
+tarjetas; sin sesion, el guardian te manda a `/login`. Cada modulo corre como
+proyecto propio de Vercel pero se sirve A TRAVES del portal (multi-zona):
+`/invest/*` se proxyea al deployment de invest, que esta construido con
+`basePath: "/invest"`.
+
+Como todo se sirve bajo un solo dominio, la cookie de sesion del portal cubre
+el vault completo: un login, todo dentro. Funciona ya en *.vercel.app, sin
+esperar dominio propio. Y el acceso directo a la URL del deployment de un
+modulo rebota al login del portal (`AUTH_LOGIN_URL`), asi que no hay puerta
+trasera.
 
 Cada modulo es autocontenido (su package.json, su DB, su README), pero el
 login es uno solo: misma contrasena, misma cookie, mismo formato de sesion.
@@ -53,21 +68,39 @@ Estado actual y futuro:
 
 ## Crear el siguiente modulo
 
-1. Crea la carpeta (`notas/`, por ejemplo) con su app Next.js y anadela a
-   `workspaces` en el package.json raiz si usas un patron distinto a los ya
-   listados.
-2. En su package.json: `"@vault/auth": "*"` y en su next.config:
-   `transpilePackages: ["@vault/auth"]` y `turbopack: { root: path.join(__dirname, "..") }`.
-3. Copia de invest: `src/lib/auth.ts`, `src/lib/attempt-store.ts`,
-   `src/proxy.ts`, la ruta `api/auth/` y la tabla `auth_attempts` del schema.
-   Son el cableado fino; la logica vive en el paquete.
-4. Nuevo proyecto en Vercel sobre este mismo repo, Root Directory = la
-   carpeta nueva, y las mismas `AUTH_*` env vars que ya usa invest.
+1. Crea la carpeta (`notas/`, por ejemplo) con su app Next.js; `workspaces`
+   en el package.json raiz ya cubre las carpetas de primer nivel que anadas
+   a la lista.
+2. En su package.json: `"@vault/auth": "*"`. En su next.config:
+   `basePath: "/notas"`, `transpilePackages: ["@vault/auth"]` y
+   `turbopack: { root: path.join(__dirname, "..") }`.
+3. Copia de invest el cableado fino: `src/lib/auth.ts`, `src/proxy.ts` (con
+   el redirect a `AUTH_LOGIN_URL`) y el helper `api()` para los fetch de
+   client components. La logica vive en `packages/auth`.
+4. En el portal: anade la tarjeta en `home/src/app/page.tsx` (lista
+   `MODULES`) y el rewrite en `home/next.config.ts` con su env
+   (`NOTAS_URL`, siguiendo el patron de `INVEST_URL`).
+5. Nuevo proyecto en Vercel sobre este mismo repo, Root Directory = la
+   carpeta nueva, mismas `AUTH_*` env vars, y `AUTH_LOGIN_URL` apuntando al
+   login del portal. Luego redeploy del portal (los rewrites se fijan en
+   build).
 
 ## Deploy en Vercel
 
-Cada modulo es un proyecto de Vercel apuntando a este repo, cambiando solo el
-**Root Directory**. La opcion "Include source files outside of the Root
-Directory" (activada por defecto) es la que permite que el build vea
-`packages/auth`. `npm install` se corre en la RAIZ del repo, no dentro del
-modulo: el lockfile vive aqui.
+Dos proyectos sobre este mismo repo, en este orden:
+
+1. **invest**: Root Directory = `invest`. Sus env vars de siempre, mas
+   `AUTH_LOGIN_URL` = `https://<portal>.vercel.app/login` (se puede anadir
+   despues del paso 2 y redeployar). Anota su URL de produccion.
+2. **home** (el portal, tu dominio principal): Root Directory = `home`.
+   Env vars: `AUTH_PASSWORD_HASH` y `AUTH_SECRET` (los mismos de invest),
+   `TURSO_DATABASE_URL` y `TURSO_AUTH_TOKEN` (para el rate limit del login) e
+   `INVEST_URL` = la URL de produccion de invest, sin barra final.
+
+Los rewrites del portal se fijan en build: si cambias `INVEST_URL`, redeploy
+del portal. Los cron de invest apuntan a `/invest/api/cron/*` (con el
+basePath) y los dispara Vercel directo contra el proyecto invest.
+
+La opcion "Include source files outside of the Root Directory" (activada por
+defecto) es la que permite que cada build vea `packages/auth`. `npm install`
+se corre en la RAIZ del repo: el lockfile vive aqui.

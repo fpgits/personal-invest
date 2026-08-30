@@ -5,6 +5,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Prefijo bajo el que este modulo se sirve dentro del vault (multi-zona).
+ * Mantener sincronizado con basePath en next.config.ts. Next aplica el
+ * basePath a <Link> y al router solo, no a fetch(): toda llamada fetch de
+ * un client component debe pasar por api().
+ */
+export const MODULE_BASE_PATH = "/invest";
+
+export function api(path: string): string {
+  return MODULE_BASE_PATH + path;
+}
+
 export function id(): string {
   return crypto.randomUUID();
 }

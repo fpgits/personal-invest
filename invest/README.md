@@ -19,13 +19,18 @@ Un solo usuario. No es multi-tenant y no pretende serlo.
 | Graficos | Recharts | Paleta validada para daltonismo, ver `src/components/charts.tsx` |
 | Deploy | Vercel | Lo pediste. Los cron de `vercel.json` mueven precios, sync, snapshots y noticias |
 
-Auth: contrasena unica + JWT en cookie httpOnly (`jose`). Sin OAuth, sin tabla de
-usuarios, sin proveedor externo.
+Auth: el paquete compartido del monorepo (`packages/auth`, `@vault/auth`):
+contrasena unica con scrypt, JWT en cookie httpOnly `__Secure-vault_session` y
+rate limit de login en DB (10 fallos por IP cada 15 min). Sin OAuth, sin tabla
+de usuarios, sin proveedor externo. El mismo login sirve para todos los
+modulos del vault; el README de la raiz explica como.
 
 ## Puesta en marcha
 
 ```bash
+# desde la RAIZ del monorepo (el lockfile y node_modules viven alli)
 npm install
+cd invest
 cp .env.example .env.local
 npm run hash-password -- "tu-clave-de-12-o-mas"   # imprime todos los secretos
 npm run db:push                                    # crea las tablas en Turso
@@ -42,7 +47,8 @@ pantalla diciendo exactamente que falta.
 | `TURSO_DATABASE_URL` | si | Panel de Turso, empieza por `libsql://` |
 | `TURSO_AUTH_TOKEN` | si | `turso db tokens create personal-invest` |
 | `AUTH_PASSWORD_HASH` | si | `npm run hash-password -- "tu-clave"` |
-| `AUTH_SECRET` | si | `openssl rand -base64 32` |
+| `AUTH_SECRET` | si | `openssl rand -base64 32`. El mismo en todos los modulos del vault |
+| `AUTH_COOKIE_DOMAIN` | no | Solo con dominio propio: `.tudominio.com` comparte la sesion entre modulos |
 | `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
 | `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |
 | `FINNHUB_API_KEY` | no | finnhub.io/register. Sin esto no hay precios de acciones |

@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { Card, CardTitle, PageTitle } from "@/components/ui";
+import { api } from "@/lib/utils";
 
 type ModelInfo = {
   id: string;
@@ -24,7 +25,7 @@ export default function AjustesPage() {
     models: ModelInfo[];
     current: { analysis: string; fast: string };
     error?: string;
-  }>("/api/models", fetcher);
+  }>(api("/api/models"), fetcher);
   const { data: settingsData, mutate } = useSWR<{
     settings: Record<string, string>;
   }>("/api/settings", fetcher);
@@ -52,7 +53,7 @@ export default function AjustesPage() {
   async function save() {
     setBusy(true);
     setSaved(false);
-    await fetch("/api/settings", {
+    await fetch(api("/api/settings"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui";
 import type { Asset } from "@/db/schema";
 import type { SearchHit } from "@/lib/market/types";
-import { fmtMoney } from "@/lib/utils";
+import { api, fmtMoney } from "@/lib/utils";
 
 type Item = {
   entry: { id: string; assetId: string; note: string | null };
@@ -31,8 +31,7 @@ type Item = {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function WatchlistPage() {
-  const { data, mutate, isLoading } = useSWR<{ items: Item[] }>(
-    "/api/watchlist",
+  const { data, mutate, isLoading } = useSWR<{ items: Item[] }>(api("/api/watchlist"),
     fetcher,
     { refreshInterval: 60_000 },
   );
@@ -40,7 +39,7 @@ export default function WatchlistPage() {
 
   async function add(hit: SearchHit) {
     setBusy(true);
-    await fetch("/api/watchlist", {
+    await fetch(api("/api/watchlist"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -55,7 +54,7 @@ export default function WatchlistPage() {
   }
 
   async function remove(assetId: string) {
-    await fetch(`/api/watchlist?assetId=${encodeURIComponent(assetId)}`, {
+    await fetch(api(`/api/watchlist?assetId=${encodeURIComponent(assetId)}`), {
       method: "DELETE",
     });
     mutate();

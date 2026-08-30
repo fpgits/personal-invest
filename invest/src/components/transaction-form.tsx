@@ -6,6 +6,7 @@ import { Plus, Upload, X } from "lucide-react";
 import type { SearchHit } from "@/lib/market/types";
 import { AssetSearch } from "./asset-search";
 import { AssetIcon, Card, ClassBadge } from "./ui";
+import { api } from "@/lib/utils";
 
 const TYPES = [
   { value: "buy", label: "Compra" },
@@ -48,7 +49,7 @@ export function TransactionForm() {
     setBusy(true);
     setError(null);
 
-    const res = await fetch("/api/transactions", {
+    const res = await fetch(api("/api/transactions"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -257,7 +258,7 @@ export function CsvImport() {
     const text = await file.text();
     setContent(text);
     setBusy(true);
-    const res = await fetch("/api/import/csv?dryRun=1", {
+    const res = await fetch(api("/api/import/csv?dryRun=1"), {
       method: "POST",
       body: text,
     });
@@ -269,7 +270,7 @@ export function CsvImport() {
   async function confirm() {
     if (!content) return;
     setBusy(true);
-    const res = await fetch("/api/import/csv", { method: "POST", body: content });
+    const res = await fetch(api("/api/import/csv"), { method: "POST", body: content });
     const data = await res.json();
     setBusy(false);
     setPreview(null);

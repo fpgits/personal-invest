@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import type { SearchHit } from "@/lib/market/types";
 import { AssetIcon, ClassBadge } from "./ui";
+import { api } from "@/lib/utils";
 
 /** Buscador con debounce contra /api/search. Devuelve el activo elegido. */
 export function AssetSearch({
@@ -32,7 +33,7 @@ export function AssetSearch({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+        const res = await fetch(api(`/api/search?q=${encodeURIComponent(query)}`), {
           signal: ctrl.signal,
         });
         const data = await res.json();

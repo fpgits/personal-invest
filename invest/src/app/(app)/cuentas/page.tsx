@@ -13,7 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Badge, Card, CardTitle, EmptyState, PageTitle } from "@/components/ui";
-import { fmtDateTime } from "@/lib/utils";
+import { api, fmtDateTime } from "@/lib/utils";
 
 type AccountRow = {
   id: string;
@@ -42,7 +42,7 @@ export default function CuentasPage() {
     accounts: AccountRow[];
     supportedExchanges: Exchange[];
     supportedBrokers: Broker[];
-  }>("/api/accounts", fetcher);
+  }>(api("/api/accounts"), fetcher);
 
   const [adding, setAdding] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export default function CuentasPage() {
   async function sync(id: string) {
     setWorking(id);
     setMessage(null);
-    const res = await fetch(`/api/accounts/${id}/sync`, { method: "POST" });
+    const res = await fetch(api(`/api/accounts/${id}/sync`), { method: "POST" });
     const j = await res.json();
     setWorking(null);
     if (j.ok) {
@@ -71,7 +71,7 @@ export default function CuentasPage() {
   async function test(id: string) {
     setWorking(id);
     setMessage(null);
-    const res = await fetch(`/api/accounts/${id}/test`, { method: "POST" });
+    const res = await fetch(api(`/api/accounts/${id}/test`), { method: "POST" });
     const j = await res.json();
     setWorking(null);
     setMessage(j.ok ? `Conexion correcta. ${j.detail ?? ""}` : `No conecta: ${j.error}`);
@@ -79,7 +79,7 @@ export default function CuentasPage() {
 
   async function remove(id: string) {
     setWorking(id);
-    await fetch(`/api/accounts?id=${id}`, { method: "DELETE" });
+    await fetch(api(`/api/accounts?id=${id}`), { method: "DELETE" });
     setWorking(null);
     mutate();
   }
@@ -266,7 +266,7 @@ function AccountForm({
             apiPassphrase: apiPassphrase || undefined,
           };
 
-    const res = await fetch("/api/accounts", {
+    const res = await fetch(api("/api/accounts"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

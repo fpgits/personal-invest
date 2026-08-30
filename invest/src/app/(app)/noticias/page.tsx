@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
 import type { NewsRow } from "@/db/schema";
-import { fmtDateTime } from "@/lib/utils";
+import { api, fmtDateTime } from "@/lib/utils";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -16,8 +16,7 @@ const SENTIMENT: Record<string, { label: string; tone: "up" | "down" | "neutral"
 };
 
 export default function NoticiasPage() {
-  const { data, mutate, isLoading } = useSWR<{ news: NewsRow[] }>(
-    "/api/news",
+  const { data, mutate, isLoading } = useSWR<{ news: NewsRow[] }>(api("/api/news"),
     fetcher,
   );
   const [refreshing, setRefreshing] = useState(false);
@@ -25,7 +24,7 @@ export default function NoticiasPage() {
 
   async function refresh() {
     setRefreshing(true);
-    const res = await fetch("/api/news", { method: "POST" });
+    const res = await fetch(api("/api/news"), { method: "POST" });
     const json = await res.json();
     mutate(json, false);
     setRefreshing(false);

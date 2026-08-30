@@ -6,23 +6,27 @@ import {
   verifySessionToken,
 } from "@vault/auth/session";
 import { verifyPassword } from "@vault/auth/password";
-import { env } from "./env";
 
 /**
- * Cableado del auth compartido (@vault/auth) para este modulo.
- * El nombre de cookie, el formato de sesion y el secreto son comunes a todo
- * el monorepo: cualquier modulo con el mismo AUTH_SECRET acepta esta sesion.
+ * Cableado del auth compartido para el portal. Identico al de invest a
+ * proposito: misma cookie, mismo secreto, misma sesion.
  */
 
 const isProduction = process.env.NODE_ENV === "production";
+
+function req(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Falta la variable de entorno ${name}`);
+  return v;
+}
 
 export function cookieName(): string {
   return sessionCookieName(isProduction);
 }
 
 export async function login(password: string): Promise<boolean> {
-  if (!verifyPassword(password, env.authHash)) return false;
-  const token = await createSessionToken(env.authSecret);
+  if (!verifyPassword(password, req("AUTH_PASSWORD_HASH"))) return false;
+  const token = await createSessionToken(req("AUTH_SECRET"));
   const jar = await cookies();
   jar.set(
     cookieName(),
@@ -48,19 +52,5 @@ export async function isAuthenticated(): Promise<boolean> {
   const jar = await cookies();
   const token = jar.get(cookieName())?.value;
   if (!token) return false;
-  return verifySessionToken(token, env.authSecret);
-}
-
-/** Para route handlers: corta con 401 si no hay sesion. */
-export async function requireAuth(): Promise<Response | null> {
-  if (await isAuthenticated()) return null;
-  return Response.json({ error: "No autorizado" }, { status: 401 });
-}
-
-/** Los endpoints de cron se autentican con CRON_SECRET, no con la cookie. */
-export function isCronAuthorized(req: Request): boolean {
-  const secretValue = env.cronSecret;
-  if (!secretValue) return false;
-  const header = req.headers.get("authorization");
-  return header === `Bearer ${secretValue}`;
+  return verifySessionToken(token, req("AUTH_SECRET"));
 }
