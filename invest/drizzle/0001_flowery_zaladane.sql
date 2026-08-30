@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `flex_query_id` text;

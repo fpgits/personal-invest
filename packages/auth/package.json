@@ -1,0 +1,15 @@
+{
+  "name": "@vault/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Auth compartido del monorepo: sesion JWT, hash de contrasena y throttle de login. Un solo login para todos los modulos.",
+  "exports": {
+    "./session": "./src/session.ts",
+    "./password": "./src/password.ts",
+    "./throttle": "./src/throttle.ts"
+  },
+  "peerDependencies": {
+    "jose": "^6.0.0"
+  }
+}
