@@ -55,7 +55,7 @@ pantalla diciendo exactamente que falta.
 |---|---|---|
 | `TURSO_DATABASE_URL` | si | Panel de Turso, empieza por `libsql://` |
 | `TURSO_AUTH_TOKEN` | si | `turso db tokens create personal-invest` |
-| `AUTH_PASSWORD_HASH` | si | `npm run hash-password -- "tu-clave"` |
+| `AUTH_PASSWORD` o `AUTH_PASSWORD_HASH` | si (una de las dos) | La clave tal cual (sin `$`), o el hash de `npm run hash-password`. Con ambas, manda `AUTH_PASSWORD` |
 | `AUTH_SECRET` | si | `openssl rand -base64 32` |
 | `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
 | `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |

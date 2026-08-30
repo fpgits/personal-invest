@@ -29,11 +29,11 @@ export function checkSetup(): SetupCheck[] {
       hint: "openssl rand -base64 32",
     },
     {
-      key: "AUTH_PASSWORD_HASH",
+      key: "AUTH_PASSWORD",
       label: "Contrasena de acceso",
-      ok: has("AUTH_PASSWORD_HASH"),
+      ok: has("AUTH_PASSWORD") || has("AUTH_PASSWORD_HASH"),
       required: true,
-      hint: 'npm run hash-password -- "tu-clave"',
+      hint: 'AUTH_PASSWORD con la clave tal cual, o AUTH_PASSWORD_HASH con `npm run hash-password -- "tu-clave"`',
     },
     {
       key: "ENCRYPTION_KEY",

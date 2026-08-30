@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 /**
  * Hash y verificacion de la contrasena unica del vault. Solo Node runtime.
@@ -41,4 +41,17 @@ export function verifyPassword(password: string, stored: string): boolean {
     expected.length,
   );
   return expected.length === derived.length && timingSafeEqual(expected, derived);
+}
+
+/**
+ * Comparacion de contrasena en claro (AUTH_PASSWORD) en tiempo constante.
+ * Se hashea cada lado con sha256 para igualar longitudes antes de comparar;
+ * asi timingSafeEqual no filtra la longitud de la clave.
+ */
+export function verifyPlainPassword(password: string, expected: string): boolean {
+  const cleaned = normalizeStoredHash(expected);
+  if (!cleaned) return false;
+  const a = createHash("sha256").update(password).digest();
+  const b = createHash("sha256").update(cleaned).digest();
+  return timingSafeEqual(a, b);
 }

@@ -38,6 +38,10 @@ export const env = {
   get coingeckoKey() {
     return opt("COINGECKO_API_KEY");
   },
+  /** Alternativa simple: la contrasena tal cual en AUTH_PASSWORD. */
+  get authPassword() {
+    return opt("AUTH_PASSWORD");
+  },
   get authHash() {
     const raw = req("AUTH_PASSWORD_HASH").trim().replace(/^["']+|["']+$/g, "");
     /*

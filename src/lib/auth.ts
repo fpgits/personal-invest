@@ -5,7 +5,7 @@ import {
   sessionCookieName,
   verifySessionToken,
 } from "@/lib/vault/session";
-import { verifyPassword } from "@/lib/vault/password";
+import { verifyPassword, verifyPlainPassword } from "@/lib/vault/password";
 import { env } from "./env";
 
 /**
@@ -20,8 +20,21 @@ export function cookieName(): string {
   return sessionCookieName(isProduction);
 }
 
+/**
+ * Dos formas de configurar la llave del vault, a eleccion:
+ * - AUTH_PASSWORD: la contrasena tal cual en la env var. Simple.
+ * - AUTH_PASSWORD_HASH: el hash scrypt (npm run hash-password). Si alguien ve
+ *   tus env vars o un pantallazo, no aprende la contrasena.
+ * Si ambas existen, manda AUTH_PASSWORD.
+ */
+function checkPassword(password: string): boolean {
+  const plain = env.authPassword;
+  if (plain) return verifyPlainPassword(password, plain);
+  return verifyPassword(password, env.authHash);
+}
+
 export async function login(password: string): Promise<boolean> {
-  if (!verifyPassword(password, env.authHash)) return false;
+  if (!checkPassword(password)) return false;
   const token = await createSessionToken(env.authSecret);
   const jar = await cookies();
   jar.set(
