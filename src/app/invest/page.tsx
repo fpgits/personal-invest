@@ -2,11 +2,10 @@ import Link from "next/link";
 import { ArrowUpRight, RefreshCw } from "lucide-react";
 import {
   AllocationBar,
-  CLASS_LABELS,
   PortfolioChart,
   WeightBars,
-  classColor,
 } from "@/components/charts";
+import { CLASS_LABELS, classColor } from "@/lib/colors";
 import { SetupNotice } from "@/components/setup-notice";
 import {
   AssetIcon,

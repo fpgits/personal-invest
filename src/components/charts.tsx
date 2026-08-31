@@ -11,27 +11,8 @@ import {
 } from "recharts";
 import { cn, fmtMoney } from "@/lib/utils";
 
-/**
- * Paleta categorica validada contra la superficie oscura #12151a
- * (todos los pares: CVD dE 9.4, vision normal dE 20.9, contraste >= 3:1).
- * El color sigue a la ENTIDAD, no al orden: cripto siempre es el mismo naranja
- * aunque cambie de posicion en la lista.
- */
-export const CLASS_COLORS: Record<string, string> = {
-  equity: "#3987e5",
-  crypto: "#d95926",
-  etf: "#199e70",
-};
-
-export const CLASS_LABELS: Record<string, string> = {
-  equity: "Bolsa",
-  crypto: "Cripto",
-  etf: "ETF",
-};
-
-export function classColor(assetClass: string) {
-  return CLASS_COLORS[assetClass] ?? "#8b94a3";
-}
+// Colores por clase de activo: ver src/lib/colors.ts (modulo compartido
+// con las paginas de servidor).
 
 const AXIS = "#8b94a3";
 const GRID = "#232830";

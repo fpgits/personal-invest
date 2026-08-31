@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm";
-import { classColor } from "@/components/charts";
+import { classColor } from "@/lib/colors";
 import { TransactionForm } from "@/components/transaction-form";
 import {
   AssetIcon,
