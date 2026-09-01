@@ -26,12 +26,20 @@ const STOPWORDS = new Set(
 
 export function tokenize(text: string): string[] {
   return text
-    .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9$%\s]/g, " ")
+    .replace(/[^A-Za-z0-9$%\s]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
+    .filter((raw) => {
+      if (!raw) return false;
+      // Q3, EU, AI, 5G, US: dos letras con digito o en mayusculas son senal
+      // en un titular financiero; "of", "in", "as" no.
+      const keep =
+        raw.length >= 3 ||
+        (raw.length === 2 && (/\d/.test(raw) || raw === raw.toUpperCase()));
+      return keep && !STOPWORDS.has(raw.toLowerCase());
+    })
+    .map((t) => t.toLowerCase());
 }
 
 export function jaccard(a: Set<string>, b: Set<string>): number {
@@ -79,14 +87,36 @@ type Open = {
   tickers: Set<string>;
   items: IntelNews[];
   occurredAt: number;
+  /** Cluster sembrado por una noticia ya consumida: pertenece a este evento. */
+  eventId?: string;
+  /** Cuantas noticias NUEVAS ha recibido (las anclas no cuentan). */
+  fresh: number;
 };
 
+/** Noticia ya consumida por un evento, usada como semilla de cluster. */
+export type Anchor = { item: IntelNews; eventId: string };
+
+/**
+ * Agrupa por similitud lexica. Las anclas (noticias recientes que ya tienen
+ * evento) se siembran primero: una noticia nueva que se parece a un ancla se
+ * engancha a ese evento de forma determinista, sin pasar por la IA. Eso es lo
+ * que evita que una historia que llega en dos pasadas del cron acabe en dos
+ * eventos distintos.
+ */
 export function lexicalClusters(
   items: IntelNews[],
+  anchors: Anchor[] = [],
   opts: LexicalOptions = DEFAULT_LEXICAL,
 ): Cluster[] {
   const sorted = [...items].sort((a, b) => a.publishedAt - b.publishedAt);
-  const open: Open[] = [];
+  const open: Open[] = anchors.map((a) => ({
+    tokens: new Set(tokenize(a.item.headline)),
+    tickers: new Set(a.item.tickers.map((t) => t.toUpperCase())),
+    items: [],
+    occurredAt: a.item.publishedAt,
+    eventId: a.eventId,
+    fresh: 0,
+  }));
 
   for (const item of sorted) {
     const tokens = new Set(tokenize(item.headline));
@@ -108,13 +138,16 @@ export function lexicalClusters(
 
     if (best) {
       best.items.push(item);
+      best.fresh++;
       for (const t of tickers) best.tickers.add(t);
     } else {
-      open.push({ tokens, tickers, items: [item], occurredAt: item.publishedAt });
+      open.push({ tokens, tickers, items: [item], occurredAt: item.publishedAt, fresh: 1 });
     }
   }
 
-  return open.map((c) => toCluster(c.items));
+  return open
+    .filter((c) => c.fresh > 0)
+    .map((c) => (c.eventId ? { ...toCluster(c.items), eventId: c.eventId } : toCluster(c.items)));
 }
 
 export function toCluster(items: IntelNews[]): Cluster {
@@ -127,6 +160,12 @@ export function toCluster(items: IntelNews[]): Cluster {
     items: sorted,
     occurredAt,
   };
+}
+
+function sharesTicker(a: Iterable<string>, b: Iterable<string>): boolean {
+  const set = new Set([...a].map((t) => t.toUpperCase()));
+  for (const t of b) if (set.has(t.toUpperCase())) return true;
+  return false;
 }
 
 /** Evento ya guardado al que un cluster nuevo se puede enganchar. */
@@ -157,15 +196,22 @@ export type MergeResult = {
   attached: Array<{ eventId: string; items: IntelNews[] }>;
 };
 
+export const DEFAULT_ATTACH_WINDOW_MS = 5 * 86400_000;
+
 /**
- * Aplica el plan sin fiarse de el: cada indice se usa como mucho una vez, los
- * indices fuera de rango y los alias desconocidos se ignoran, y todo cluster
- * que el plan no menciona sigue tal cual.
+ * Aplica el plan sin fiarse de el:
+ *  - cada indice se usa como mucho una vez; fuera de rango se ignora;
+ *  - una fusion solo vale si todos los miembros comparten ticker con el
+ *    primero (el modelo no puede juntar AAPL con TSLA en "un hecho");
+ *  - un enganche solo vale si el alias existe, comparte empresa con el
+ *    cluster y cae dentro de la ventana temporal;
+ *  - todo lo que el plan no menciona (o menciona mal) sigue tal cual.
  */
 export function applyMergePlan(
   clusters: Cluster[],
   plan: MergePlan | null,
   existing: ExistingEvent[] = [],
+  attachWindowMs = DEFAULT_ATTACH_WINDOW_MS,
 ): MergeResult {
   if (!plan) return { clusters, attached: [] };
 
@@ -175,18 +221,25 @@ export function applyMergePlan(
   const attached: MergeResult["attached"] = [];
 
   for (const group of plan.groups) {
-    const members = [...new Set(group.members)].filter(
+    const candidates = [...new Set(group.members)].filter(
       (i) => i < clusters.length && !used.has(i),
     );
-    if (members.length === 0) continue;
+    if (candidates.length === 0) continue;
+    const head = clusters[candidates[0]];
+    const members = candidates.filter((i) => sharesTicker(head.tickers, clusters[i].tickers));
     for (const i of members) used.add(i);
     const items = members.flatMap((i) => clusters[i].items);
+    const cluster = toCluster(items);
 
     const target = group.existing ? byAlias.get(group.existing.toUpperCase()) : undefined;
-    if (target) {
+    const attachable =
+      target &&
+      sharesTicker(cluster.tickers, target.companies) &&
+      Math.abs(cluster.occurredAt - target.occurredAt) <= attachWindowMs;
+    if (attachable) {
       attached.push({ eventId: target.id, items });
     } else {
-      merged.push(toCluster(items));
+      merged.push(cluster);
     }
   }
 

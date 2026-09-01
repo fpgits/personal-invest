@@ -1,29 +1,39 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assets,
   events,
   eventSources,
   news,
+  settings,
   theses,
   watchlist,
   type EventRow,
+  type NewsRow,
 } from "@/db/schema";
 import { listAssets } from "@/lib/assets";
 import { computePortfolio } from "@/lib/portfolio";
+import { getSetting, setSetting } from "@/lib/settings";
 import { id } from "@/lib/utils";
 import {
   applyMergePlan,
   lexicalClusters,
+  type Anchor,
   type ExistingEvent,
 } from "./dedup";
-import { extractEvent, planMerge, type ExtractContext } from "./extract";
+import {
+  extractEvent as defaultExtract,
+  planMerge as defaultMerge,
+  type ExtractContext,
+  type ExtractResult,
+} from "./extract";
 import { portfolioRelevance, scoreSignal } from "./score";
-import { bestTier, sourceTier } from "./sources";
+import { bestTier, hostOf, sourceTier } from "./sources";
 import {
   FEEDBACK_VALUES,
   PRIORITIES,
   type Cluster,
+  type ExtractedEvent,
   type Feedback,
   type IntelNews,
   type Priority,
@@ -35,11 +45,16 @@ import {
  *
  * Control de coste, en este orden:
  *  1. Sin IA: descarta lo viejo, lo que no toca a ningun activo seguido y lo
- *     que el resumen barato ya marco como impacto bajo.
- *  2. Sin IA: agrupa duplicados lexicos.
- *  3. Una llamada barata: agrupa parafrasis y engancha a eventos recientes.
- *  4. Una llamada de analisis POR CLUSTER, con tope por ejecucion. Lo que no
- *     entra se queda pendiente para la siguiente.
+ *     que el resumen barato marco como impacto bajo. Lo que aun no tiene
+ *     resumen NO entra (la puerta barata falla cerrada, no abierta).
+ *  2. Sin IA: agrupa duplicados lexicos y engancha a eventos recientes por
+ *     anclas (noticias ya consumidas), de forma determinista.
+ *  3. Una llamada barata: agrupa parafrasis y engancha lo que la lexica no vio.
+ *  4. Una llamada de analisis POR CLUSTER, con tope por ejecucion y fecha
+ *     limite. Lo que no entra se queda pendiente para la siguiente.
+ *
+ * Solo corre una pasada a la vez (cerrojo en `settings`), y cada fallo cuenta
+ * intentos por noticia: un cluster que falla siempre se abandona, no bloquea.
  */
 export const INTEL_LIMITS = {
   newsPerRun: 60,
@@ -48,31 +63,102 @@ export const INTEL_LIMITS = {
   maxAgeDays: 14,
   /** Ventana en la que un cluster nuevo puede engancharse a un evento previo. */
   attachWindowDays: 5,
+  /** Noticias consumidas en esta ventana sirven de ancla para la dedup. */
+  anchorWindowHours: 72,
+  /** Fallos (de cualquier tipo) antes de abandonar una noticia. */
+  maxAttempts: 3,
+  /** Tiempo de pasada tras el cual no se empiezan mas extracciones. */
+  deadlineMs: 200_000,
+  /** Vida del cerrojo; mayor que la duracion maxima de la funcion. */
+  lockTtlMs: 6 * 60_000,
 } as const;
 
+export const LAST_RUN_KEY = "intel_last_run";
+const LOCK_KEY = "intel_lock";
+
 export type RunStats = {
+  startedAt: number;
+  finishedAt: number;
+  /** cron | manual */
+  trigger: string;
   scanned: number;
   skipped: number;
+  /** Con ticker seguido pero sin resumen todavia: esperan al modelo rapido. */
+  unsummarized: number;
   clusters: number;
   attached: number;
   created: number;
+  updated: number;
   noise: number;
   deferred: number;
   invalid: number;
+  rejected: number;
   transient: number;
+  abandoned: number;
   /** Ultimo error del modelo, para verlo en la UI y en los logs sin adivinar. */
   error?: string;
+  warning?: string;
+  /** true si otra pasada tenia el cerrojo y esta no hizo nada. */
+  locked?: boolean;
+};
+
+export type IntelDeps = {
+  extract: (cluster: Cluster, ctx: ExtractContext) => Promise<ExtractResult>;
+  merge: typeof defaultMerge;
+  now: () => number;
+};
+
+const defaultDeps: IntelDeps = {
+  extract: defaultExtract,
+  merge: defaultMerge,
+  now: () => Date.now(),
 };
 
 export async function processEvents(
-  limits: Partial<typeof INTEL_LIMITS> = {},
+  opts: { trigger?: string; limits?: Partial<typeof INTEL_LIMITS> } = {},
+  deps: Partial<IntelDeps> = {},
 ): Promise<RunStats> {
-  const L = { ...INTEL_LIMITS, ...limits };
+  const D = { ...defaultDeps, ...deps };
+  const L = { ...INTEL_LIMITS, ...opts.limits };
+  const startedAt = D.now();
   const stats: RunStats = {
-    scanned: 0, skipped: 0, clusters: 0, attached: 0,
-    created: 0, noise: 0, deferred: 0, invalid: 0, transient: 0,
+    startedAt, finishedAt: startedAt, trigger: opts.trigger ?? "manual",
+    scanned: 0, skipped: 0, unsummarized: 0, clusters: 0, attached: 0, created: 0,
+    updated: 0, noise: 0, deferred: 0, invalid: 0, rejected: 0, transient: 0, abandoned: 0,
   };
-  const now = Date.now();
+
+  if (!(await acquireLock(startedAt, L.lockTtlMs))) {
+    stats.locked = true;
+    stats.warning = "Ya hay una pasada en marcha.";
+    stats.finishedAt = D.now();
+    return stats;
+  }
+
+  try {
+    await run(stats, L, D);
+  } catch (e) {
+    stats.error = e instanceof Error ? e.message : String(e);
+    throw e;
+  } finally {
+    stats.finishedAt = D.now();
+    await releaseLock();
+    await setSetting(LAST_RUN_KEY, JSON.stringify(stats)).catch(() => undefined);
+    console.log(
+      `[intel] ${stats.trigger} escaneadas=${stats.scanned} descartadas=${stats.skipped} ` +
+        `sin_resumen=${stats.unsummarized} clusters=${stats.clusters} nuevos=${stats.created} ` +
+        `actualizados=${stats.updated} ruido=${stats.noise} enganchados=${stats.attached} ` +
+        `pendientes=${stats.deferred} invalidos=${stats.invalid} rechazados=${stats.rejected} ` +
+        `transitorios=${stats.transient} abandonados=${stats.abandoned} ` +
+        `ms=${stats.finishedAt - stats.startedAt}` +
+        (stats.error ? ` error=${JSON.stringify(stats.error)}` : "") +
+        (stats.warning ? ` aviso=${JSON.stringify(stats.warning)}` : ""),
+    );
+  }
+  return stats;
+}
+
+async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
+  const now = stats.startedAt;
 
   const pending = await db
     .select()
@@ -81,9 +167,9 @@ export async function processEvents(
     .orderBy(desc(news.publishedAt))
     .limit(L.newsPerRun);
   stats.scanned = pending.length;
-  if (pending.length === 0) return stats;
+  if (pending.length === 0) return;
 
-  const ctx = await buildContext();
+  const ctx = await buildContext(stats);
   const tracked = new Set(ctx.tracked.map((t) => t.symbol.toUpperCase()));
 
   // 1. Filtro sin IA.
@@ -96,91 +182,150 @@ export async function processEvents(
       skip.push(n.id);
       continue;
     }
-    eligible.push({
-      id: n.id,
-      headline: n.headline,
-      url: n.url,
-      source: n.source,
-      summary: n.summary,
-      impact: n.impact,
-      tickers,
-      publishedAt: n.publishedAt,
-    });
+    if (n.eventAttempts >= L.maxAttempts) {
+      skip.push(n.id);
+      stats.abandoned++;
+      continue;
+    }
+    if (!n.impact) {
+      // Aun sin resumen del modelo rapido: no se toca, ya llegara.
+      stats.unsummarized++;
+      continue;
+    }
+    eligible.push(toIntelNews(n, tickers));
   }
   await markProcessed(skip, now);
   stats.skipped = skip.length;
-  if (eligible.length === 0) return stats;
+  if (stats.unsummarized > 0) {
+    stats.warning = `${stats.unsummarized} noticias esperan resumen del modelo rapido.`;
+  }
+  if (eligible.length === 0) return;
 
-  // 2 y 3. Dedup lexica + plan semantico (una llamada barata).
-  const lexical = lexicalClusters(eligible);
+  // 2. Dedup lexica con anclas: lo que se parece a una noticia ya consumida
+  //    se engancha a su evento sin IA.
+  const anchors = await recentAnchors(now - L.anchorWindowHours * 3600_000, tracked);
+  const lexical = lexicalClusters(eligible, anchors);
+  const anchored = lexical.filter((c) => c.eventId);
+  const fresh = lexical.filter((c) => !c.eventId);
+  for (const c of anchored) {
+    await attachSources(c.eventId!, c.items, now);
+    stats.attached++;
+  }
+
+  // 3. Plan semantico (una llamada barata) sobre lo que queda.
   const existing = await recentForAttach(now - L.attachWindowDays * 86400_000);
-  const plan = await planMerge(lexical, existing);
-  const merged = applyMergePlan(lexical, plan, existing);
+  const plan = fresh.length > 0 ? await D.merge(fresh, existing) : null;
+  const merged = applyMergePlan(fresh, plan, existing, L.attachWindowDays * 86400_000);
   stats.clusters = merged.clusters.length;
 
+  // Enganches del plan: si traen evidencia mejor que la que tenia el evento
+  // (p. ej. Reuters confirma lo que solo contaba un tuit), se reanaliza con
+  // todas las fuentes; cuenta contra el presupuesto de extracciones.
+  const reanalyses: Array<{ eventId: string; items: IntelNews[] }> = [];
   for (const a of merged.attached) {
-    await attachSources(a.eventId, a.items, now);
-    stats.attached++;
+    const target = existing.find((e) => e.id === a.eventId);
+    const newTier = bestTier(a.items.map((i) => sourceTier(i.source, i.url)));
+    if (target && newTier < target.sourceTier && reanalyses.length < L.extractionsPerRun) {
+      reanalyses.push(a);
+    } else {
+      await attachSources(a.eventId, a.items, now);
+      stats.attached++;
+    }
   }
 
   // 4. Extraccion con tope: primero lo que mas pinta tiene de importar.
   const ordered = [...merged.clusters].sort(byPromise);
-  const budget = ordered.slice(0, L.extractionsPerRun);
+  const budget = ordered.slice(0, Math.max(0, L.extractionsPerRun - reanalyses.length));
   stats.deferred = ordered.length - budget.length;
 
-  for (const cluster of budget) {
-    const res = await extractEvent(cluster, ctx);
-    if (!res.ok) {
-      console.warn(`[intel] extraccion ${res.kind} (${cluster.key}): ${res.message}`);
-      stats.error = res.message;
-      if (res.kind === "invalid") {
-        stats.invalid++;
-        await markProcessed(cluster.items.map((i) => i.id), now);
-        continue;
-      }
-      // Fallo transitorio (red, cuota, modelo mal configurado): no tiene
-      // sentido quemar el resto del presupuesto en la misma pasada. Lo que
-      // queda sigue pendiente y se reintenta en el siguiente cron.
-      stats.transient++;
-      stats.deferred += budget.length - budget.indexOf(cluster) - 1;
+  type Job = { cluster: Cluster; newItems: IntelNews[]; reanalyzeId?: string };
+  const jobs: Job[] = [];
+  for (const r of reanalyses) {
+    const previous = await sourcesOf(r.eventId);
+    jobs.push({
+      cluster: { ...clusterFrom([...previous, ...r.items]), key: `reanalysis:${r.eventId}` },
+      newItems: r.items,
+      reanalyzeId: r.eventId,
+    });
+  }
+  for (const cluster of budget) jobs.push({ cluster, newItems: cluster.items });
+
+  let successes = 0;
+  for (let j = 0; j < jobs.length; j++) {
+    const { cluster, newItems, reanalyzeId } = jobs[j];
+    const remaining = jobs.length - j - 1;
+
+    if (D.now() - stats.startedAt > L.deadlineMs) {
+      stats.deferred += remaining + 1;
+      stats.warning = "Se agoto el tiempo de la pasada; el resto queda pendiente.";
       break;
     }
 
-    const ev = res.event;
-    const tier = bestTier(cluster.items.map((i) => sourceTier(i.source, i.url)));
-    const relevance = portfolioRelevance(ev.companies, ctx.relevance);
-    const { score, priority } = scoreSignal({
-      materiality: ev.materiality,
-      confidence: ev.confidence,
-      thesisImpact: ev.thesis_impact,
-      portfolioRelevance: relevance,
-      sourceTier: tier,
-      isNoise: ev.is_noise,
-    });
+    // Mismo hecho ya registrado (clave identica): se engancha sin gastar.
+    if (!reanalyzeId) {
+      const prev = await findByKey(cluster.key);
+      if (prev) {
+        await attachSources(prev, cluster.items, now);
+        stats.attached++;
+        continue;
+      }
+    }
 
-    const primaryAssetId = ev.primary_symbol
-      ? (ctx.assetIdBySymbol.get(ev.primary_symbol) ?? null)
-      : null;
+    const res = await D.extract(cluster, ctx);
+
+    if (!res.ok) {
+      stats.error = res.message;
+      console.warn(`[intel] extraccion ${res.kind} (${cluster.key}): ${res.message}`);
+      if (res.countsAttempt) {
+        stats.abandoned += await bumpAttempts(newItems, L.maxAttempts, now);
+      }
+      if (res.kind === "invalid") {
+        stats.invalid++;
+        continue;
+      }
+      if (res.kind === "rejected") {
+        stats.rejected++;
+        // Si nada ha funcionado aun en esta pasada, casi seguro es un
+        // problema de configuracion (modelo, salida estructurada): parar.
+        if (successes === 0) {
+          stats.deferred += remaining;
+          break;
+        }
+        continue;
+      }
+      // Transitorio (red, cuota, 5xx): parar y dejar el resto pendiente.
+      stats.transient++;
+      stats.deferred += remaining;
+      break;
+    }
+
+    successes++;
+    const allItems = cluster.items;
+    const tier = bestTier(allItems.map((i) => sourceTier(i.source, i.url)));
+    const hosts = new Set(allItems.map((i) => hostOf(i.url)).filter(Boolean)).size;
+    const scored = scoreFor(res.event, ctx, tier, hosts);
+
+    if (reanalyzeId) {
+      await db
+        .update(events)
+        .set({
+          ...eventColumns(res.event, scored, ctx),
+          sourceTier: tier,
+          model: res.model,
+          promptVersion: res.promptVersion,
+        })
+        .where(eq(events.id, reanalyzeId));
+      await attachSources(reanalyzeId, newItems, now);
+      stats.updated++;
+      continue;
+    }
 
     const inserted = await db
       .insert(events)
       .values({
         id: id(),
-        type: ev.type,
-        primaryAssetId,
-        companies: JSON.stringify(ev.companies),
-        headline: ev.headline,
-        fact: ev.fact,
-        inference: ev.inference,
-        assessment: ev.assessment,
-        materiality: ev.materiality,
-        confidence: ev.confidence,
-        thesisImpact: ev.thesis_impact,
-        timeHorizon: ev.time_horizon,
-        portfolioRelevance: relevance,
+        ...eventColumns(res.event, scored, ctx),
         sourceTier: tier,
-        signalScore: score,
-        priority,
         occurredAt: cluster.occurredAt,
         clusterKey: cluster.key,
         model: res.model,
@@ -190,33 +335,24 @@ export async function processEvents(
       .onConflictDoNothing({ target: events.clusterKey })
       .returning({ id: events.id });
 
-    let eventId = inserted[0]?.id;
+    let eventId: string | undefined = inserted[0]?.id;
     if (!eventId) {
-      // Misma clave que un evento previo: es el mismo hecho, se engancha.
-      const prev = await db
-        .select({ id: events.id })
-        .from(events)
-        .where(eq(events.clusterKey, cluster.key))
-        .limit(1);
-      eventId = prev[0]?.id;
+      // Carrera con otra pasada: mismo hecho ya guardado, se engancha.
+      eventId = await findByKey(cluster.key);
       if (eventId) stats.attached++;
+    } else if (res.event.is_noise || scored.priority === "P5") {
+      stats.noise++;
     } else {
-      if (ev.is_noise || priority === "P5") stats.noise++;
-      else stats.created++;
+      stats.created++;
     }
 
-    if (eventId) await attachSources(eventId, cluster.items, now);
-    else await markProcessed(cluster.items.map((i) => i.id), now);
+    if (eventId) await attachSources(eventId, allItems, now);
+    else await markProcessed(allItems.map((i) => i.id), now);
   }
-
-  console.log(
-    `[intel] escaneadas=${stats.scanned} descartadas=${stats.skipped} clusters=${stats.clusters} ` +
-      `nuevos=${stats.created} ruido=${stats.noise} enganchados=${stats.attached} ` +
-      `pendientes=${stats.deferred} invalidos=${stats.invalid} transitorios=${stats.transient}` +
-      (stats.error ? ` error=${JSON.stringify(stats.error)}` : ""),
-  );
-  return stats;
 }
+
+// ---------------------------------------------------------------------------
+// Lectura
 
 export type EventSource = {
   id: string;
@@ -236,14 +372,16 @@ export async function recentEvents(opts: {
   minPriority?: Priority;
   limit?: number;
 } = {}): Promise<EventWithSources[]> {
-  const limit = Math.min(opts.limit ?? 50, 200);
+  const limit = clampInt(opts.limit, 1, 200, 50);
   const allowed = PRIORITIES.slice(0, PRIORITIES.indexOf(opts.minPriority ?? "P4") + 1);
 
+  // Lo ultimo detectado arriba: un hecho de hace dias que se acaba de
+  // analizar es novedad para ti aunque el hecho sea viejo.
   const rows = await db
     .select()
     .from(events)
     .where(inArray(events.priority, [...allowed]))
-    .orderBy(desc(events.occurredAt), desc(events.signalScore))
+    .orderBy(desc(events.createdAt), desc(events.signalScore))
     .limit(limit);
   if (rows.length === 0) return [];
 
@@ -281,6 +419,16 @@ export async function recentEvents(opts: {
   }));
 }
 
+export async function lastRun(): Promise<RunStats | null> {
+  const raw = await getSetting(LAST_RUN_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as RunStats;
+  } catch {
+    return null;
+  }
+}
+
 export async function setEventFeedback(eventId: string, feedback: Feedback | null) {
   if (feedback && !FEEDBACK_VALUES.includes(feedback)) {
     throw new Error("Feedback no valido");
@@ -292,16 +440,50 @@ export async function setEventFeedback(eventId: string, feedback: Feedback | nul
 }
 
 // ---------------------------------------------------------------------------
+// Cerrojo: una sola pasada a la vez. Una unica sentencia condicional, asi que
+// dos pasadas simultaneas no pueden ganar las dos.
+
+async function acquireLock(now: number, ttlMs: number): Promise<boolean> {
+  const until = String(now + ttlMs);
+  await db
+    .insert(settings)
+    .values({ key: LOCK_KEY, value: "0", updatedAt: now })
+    .onConflictDoNothing();
+  const won = await db
+    .update(settings)
+    .set({ value: until, updatedAt: now })
+    .where(and(eq(settings.key, LOCK_KEY), lt(sql`CAST(${settings.value} AS INTEGER)`, now)))
+    .returning({ key: settings.key });
+  return won.length > 0;
+}
+
+async function releaseLock() {
+  await db
+    .update(settings)
+    .set({ value: "0", updatedAt: Date.now() })
+    .where(eq(settings.key, LOCK_KEY))
+    .catch(() => undefined);
+}
+
+// ---------------------------------------------------------------------------
+// Contexto y helpers
 
 type Context = ExtractContext & {
   relevance: Parameters<typeof portfolioRelevance>[1];
   assetIdBySymbol: Map<string, string>;
 };
 
-async function buildContext(): Promise<Context> {
+async function buildContext(stats: RunStats): Promise<Context> {
   const [all, portfolio, watch, thesisRows] = await Promise.all([
     listAssets(),
-    computePortfolio().catch(() => null),
+    // Pesos con precios en cache: no gastamos cuota de precios ni tiempo
+    // refrescando; para la relevancia basta con el ultimo valor conocido.
+    computePortfolio({ cacheOnly: true }).catch((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[intel] cartera no disponible, relevancia degradada:", msg);
+      stats.warning = `Cartera no disponible (${msg}); relevancia degradada.`;
+      return null;
+    }),
     db
       .select({ symbol: assets.symbol })
       .from(watchlist)
@@ -312,49 +494,121 @@ async function buildContext(): Promise<Context> {
       .innerJoin(assets, eq(theses.assetId, assets.id)),
   ]);
 
-  const tracked = all
-    .filter((a) => a.assetClass !== "cash")
-    .map((a) => ({ symbol: a.symbol.toUpperCase(), name: a.name, assetClass: a.assetClass }));
+  const nonCash = all.filter((a) => a.assetClass !== "cash");
+  const tracked = nonCash.map((a) => ({
+    symbol: a.symbol.toUpperCase(),
+    name: a.name,
+    assetClass: a.assetClass,
+  }));
   const positions = (portfolio?.positions ?? [])
     .filter((p) => p.asset.assetClass !== "cash")
     .map((p) => ({ symbol: p.asset.symbol.toUpperCase(), weight: p.weight, group: p.group }));
   const watchSymbols = watch.map((w) => w.symbol.toUpperCase());
+
+  // Un simbolo puede existir en bolsa y en cripto (LINK, GRT...). Las
+  // noticias con ticker vienen de Finnhub, es decir, de bolsa: ante el
+  // choque gana el activo que no es cripto.
+  const assetIdBySymbol = new Map<string, string>();
+  for (const a of [...nonCash].sort((x, y) => Number(x.assetClass === "crypto") - Number(y.assetClass === "crypto"))) {
+    const s = a.symbol.toUpperCase();
+    if (!assetIdBySymbol.has(s)) assetIdBySymbol.set(s, a.id);
+  }
 
   return {
     tracked,
     positions,
     watchlist: watchSymbols,
     theses: new Map(thesisRows.map((t) => [t.symbol.toUpperCase(), t.thesis])),
-    relevance: {
-      positions,
-      watchlist: watchSymbols,
-      known: tracked.map((t) => t.symbol),
-    },
-    assetIdBySymbol: new Map(
-      all.filter((a) => a.assetClass !== "cash").map((a) => [a.symbol.toUpperCase(), a.id]),
-    ),
+    relevance: { positions, watchlist: watchSymbols, known: tracked.map((t) => t.symbol) },
+    assetIdBySymbol,
   };
 }
 
-async function recentForAttach(since: number): Promise<ExistingEvent[]> {
+type Scored = { score: number; priority: Priority; relevance: number };
+
+function scoreFor(ev: ExtractedEvent, ctx: Context, tier: SourceTier, hosts: number): Scored {
+  const relevance = portfolioRelevance(ev.companies, ctx.relevance);
+  const { score, priority } = scoreSignal({
+    materiality: ev.materiality,
+    confidence: ev.confidence,
+    thesisImpact: ev.thesis_impact,
+    portfolioRelevance: relevance,
+    sourceTier: tier,
+    isNoise: ev.is_noise,
+    distinctHosts: hosts,
+  });
+  return { score, priority, relevance };
+}
+
+function eventColumns(ev: ExtractedEvent, s: Scored, ctx: Context) {
+  return {
+    type: ev.type,
+    primaryAssetId: ev.primary_symbol ? (ctx.assetIdBySymbol.get(ev.primary_symbol) ?? null) : null,
+    companies: JSON.stringify(ev.companies),
+    headline: ev.headline,
+    fact: ev.fact,
+    inference: ev.inference,
+    assessment: ev.assessment,
+    materiality: ev.materiality,
+    confidence: ev.confidence,
+    thesisImpact: ev.thesis_impact,
+    timeHorizon: ev.time_horizon,
+    portfolioRelevance: s.relevance,
+    signalScore: s.score,
+    priority: s.priority,
+  };
+}
+
+type ExistingWithTier = ExistingEvent & { sourceTier: SourceTier };
+
+/** Eventos recientes a los que un cluster nuevo se puede enganchar. Nunca ruido. */
+async function recentForAttach(since: number): Promise<ExistingWithTier[]> {
   const rows = await db
     .select({
       id: events.id,
       headline: events.headline,
       companies: events.companies,
       occurredAt: events.occurredAt,
+      sourceTier: events.sourceTier,
     })
     .from(events)
-    .where(gte(events.createdAt, since))
-    .orderBy(desc(events.createdAt))
-    .limit(40);
+    .where(and(gte(events.occurredAt, since), inArray(events.priority, ["P1", "P2", "P3", "P4"])))
+    .orderBy(desc(events.occurredAt))
+    .limit(100);
   return rows.map((r, i) => ({
     id: r.id,
     alias: `E${i + 1}`,
     headline: r.headline,
     companies: parseTickers(r.companies),
     occurredAt: r.occurredAt,
+    sourceTier: r.sourceTier as SourceTier,
   }));
+}
+
+/** Noticias consumidas hace poco, con su evento: semillas de la dedup lexica. */
+async function recentAnchors(since: number, tracked: Set<string>): Promise<Anchor[]> {
+  const rows = await db
+    .select({ n: news, eventId: eventSources.eventId })
+    .from(eventSources)
+    .innerJoin(news, eq(eventSources.newsId, news.id))
+    .where(gte(news.publishedAt, since))
+    .orderBy(desc(news.publishedAt))
+    .limit(300);
+  return rows
+    .map((r) => ({
+      item: toIntelNews(r.n, parseTickers(r.n.tickers).filter((t) => tracked.has(t))),
+      eventId: r.eventId,
+    }))
+    .filter((a) => a.item.tickers.length > 0);
+}
+
+async function findByKey(key: string): Promise<string | undefined> {
+  const prev = await db
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.clusterKey, key))
+    .limit(1);
+  return prev[0]?.id;
 }
 
 async function attachSources(eventId: string, items: IntelNews[], now: number) {
@@ -376,6 +630,56 @@ async function markProcessed(ids: string[], at: number) {
   await db.update(news).set({ eventProcessedAt: at }).where(inArray(news.id, ids));
 }
 
+/** Suma un intento; las noticias que llegan al tope se abandonan. Devuelve cuantas. */
+async function bumpAttempts(items: IntelNews[], max: number, now: number): Promise<number> {
+  const ids = items.map((i) => i.id);
+  if (ids.length === 0) return 0;
+  await db
+    .update(news)
+    .set({ eventAttempts: sql`${news.eventAttempts} + 1` })
+    .where(inArray(news.id, ids));
+  const done = await db
+    .update(news)
+    .set({ eventProcessedAt: now })
+    .where(and(inArray(news.id, ids), gte(news.eventAttempts, max)))
+    .returning({ id: news.id });
+  return done.length;
+}
+
+/** Noticias ya enlazadas a un evento, como entrada de un reanalisis. */
+async function sourcesOf(eventId: string): Promise<IntelNews[]> {
+  const rows = await db
+    .select({ n: news })
+    .from(eventSources)
+    .innerJoin(news, eq(eventSources.newsId, news.id))
+    .where(eq(eventSources.eventId, eventId));
+  return rows.map((r) => toIntelNews(r.n, parseTickers(r.n.tickers)));
+}
+
+/** Para reanalisis: las fuentes previas del evento mas las nuevas. */
+function clusterFrom(items: IntelNews[]): Cluster {
+  const sorted = [...items].sort((a, b) => a.publishedAt - b.publishedAt);
+  return {
+    key: "",
+    tickers: [...new Set(sorted.flatMap((i) => i.tickers))].sort(),
+    items: sorted,
+    occurredAt: sorted[0].publishedAt,
+  };
+}
+
+function toIntelNews(n: NewsRow, tickers: string[]): IntelNews {
+  return {
+    id: n.id,
+    headline: n.headline,
+    url: n.url,
+    source: n.source,
+    summary: n.summary,
+    impact: n.impact,
+    tickers,
+    publishedAt: n.publishedAt,
+  };
+}
+
 function parseTickers(raw: string): string[] {
   try {
     const arr = JSON.parse(raw);
@@ -383,6 +687,12 @@ function parseTickers(raw: string): string[] {
   } catch {
     return [];
   }
+}
+
+function clampInt(n: unknown, lo: number, hi: number, fallback: number): number {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.trunc(v)));
 }
 
 /** Orden de prioridad para el presupuesto de extraccion. */

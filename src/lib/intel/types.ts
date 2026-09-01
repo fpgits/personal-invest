@@ -94,23 +94,47 @@ export type Cluster = {
   items: IntelNews[];
   /** Fecha del hecho: la noticia mas antigua del grupo. */
   occurredAt: number;
+  /**
+   * Si el grupo se formo alrededor de una noticia ya consumida por un evento
+   * (ancla), este es ese evento: las noticias nuevas se le enganchan sin IA.
+   */
+  eventId?: string;
 };
 
+/** Limites de texto que se aplican al guardar (ver sanitizeEvent). */
+export const TEXT_LIMITS = {
+  headline: 200,
+  fact: 1500,
+  inference: 1500,
+  assessment: 1500,
+  companies: 10,
+} as const;
+
 /**
- * Salida del modelo, validada con Zod. Todo lo que no cumpla este esquema se
- * rechaza; nunca se guarda un evento a medias.
+ * Salida del modelo, validada con Zod. Estricto en lo que importa (enums,
+ * booleanos, rangos numericos) y tolerante en lo cosmetico: un numero con
+ * decimales se redondea y un texto largo se recorta en `sanitizeEvent`, en
+ * vez de tirar a la basura un evento correcto por un parrafo de mas.
  */
+const score = (min: number, max: number) =>
+  z
+    .number()
+    .finite()
+    .min(min)
+    .max(max)
+    .transform((n) => Math.round(n));
+
 export const eventSchema = z.object({
   type: z.enum(EVENT_TYPES),
   primary_symbol: z.string().nullable(),
-  companies: z.array(z.string()).max(10),
-  headline: z.string().min(8).max(200),
-  fact: z.string().min(10).max(1500),
-  inference: z.string().max(1500),
-  assessment: z.string().max(1500),
-  materiality: z.number().int().min(0).max(100),
-  confidence: z.number().int().min(0).max(100),
-  thesis_impact: z.number().int().min(-100).max(100),
+  companies: z.array(z.string()),
+  headline: z.string().min(8),
+  fact: z.string().min(10),
+  inference: z.string(),
+  assessment: z.string(),
+  materiality: score(0, 100),
+  confidence: score(0, 100),
+  thesis_impact: score(-100, 100),
   time_horizon: z.enum(TIME_HORIZONS),
   is_noise: z.boolean(),
 });

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import {
   createSessionToken,
@@ -81,6 +82,10 @@ export async function requireAuth(): Promise<Response | null> {
 export function isCronAuthorized(req: Request): boolean {
   const secretValue = env.cronSecret;
   if (!secretValue) return false;
-  const header = req.headers.get("authorization");
-  return header === `Bearer ${secretValue}`;
+  const header = req.headers.get("authorization") ?? "";
+  const expected = Buffer.from(`Bearer ${secretValue}`);
+  const given = Buffer.from(header);
+  // Comparacion en tiempo constante: la longitud se compara aparte para no
+  // filtrar nada por el tiempo de respuesta.
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }

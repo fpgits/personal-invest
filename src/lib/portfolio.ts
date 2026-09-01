@@ -7,7 +7,7 @@ import {
   type Asset,
   type Transaction,
 } from "@/db/schema";
-import { getQuotes, type CachedQuote } from "./market";
+import { getCachedQuotes, getQuotes, type CachedQuote } from "./market";
 import { resolveBaseCurrency, resolveCostMethod } from "./settings";
 
 export type Position = {
@@ -200,7 +200,15 @@ function apply(acc: Acc, tx: Transaction, method: "average" | "fifo") {
   }
 }
 
-export async function computePortfolio(): Promise<PortfolioSummary> {
+/**
+ * `cacheOnly`: valora con el ultimo precio en cache sin refrescar nada. Lo
+ * usan los procesos de fondo que solo necesitan pesos aproximados (p. ej. la
+ * relevancia de cartera del motor de eventos) y no deben gastar tiempo ni
+ * cuota de proveedores de precios.
+ */
+export async function computePortfolio(
+  opts: { cacheOnly?: boolean } = {},
+): Promise<PortfolioSummary> {
   const [method, currency] = await Promise.all([
     resolveCostMethod(),
     resolveBaseCurrency(),
@@ -213,7 +221,14 @@ export async function computePortfolio(): Promise<PortfolioSummary> {
     .innerJoin(accounts, eq(transactions.accountId, accounts.id))
     .orderBy(asc(transactions.executedAt));
 
-  return buildSummary(rows, method, currency);
+  return buildSummary(
+    rows,
+    method,
+    currency,
+    opts.cacheOnly
+      ? (held) => getCachedQuotes(held).catch(() => ({}) as Record<string, CachedQuote>)
+      : undefined,
+  );
 }
 
 /**

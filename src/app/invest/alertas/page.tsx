@@ -14,7 +14,36 @@ import {
 } from "@/lib/intel/types";
 import { api, cn, fmtDateTime } from "@/lib/utils";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+};
+
+/** Solo enlaces http(s): una URL rara de una fuente no se convierte en enlace. */
+function safeHref(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function fmtRun(run: RunStats): string {
+  const parts = [
+    `${run.scanned} noticias`,
+    `${run.clusters} hechos`,
+    `${run.created} nuevos`,
+    run.updated > 0 ? `${run.updated} actualizados` : "",
+    run.attached > 0 ? `${run.attached} enganchados` : "",
+    `${run.noise} ruido`,
+    run.deferred > 0 ? `${run.deferred} pendientes` : "",
+    run.unsummarized > 0 ? `${run.unsummarized} sin resumir` : "",
+    run.abandoned > 0 ? `${run.abandoned} abandonadas` : "",
+  ].filter(Boolean);
+  return parts.join(", ");
+}
 
 type Filter = "signals" | "all" | "noise";
 const FILTERS: Array<{ id: Filter; label: string; min: Priority }> = [
@@ -43,35 +72,42 @@ const FEEDBACK: Array<{ id: Feedback; label: string }> = [
 export default function AlertasPage() {
   const [filter, setFilter] = useState<Filter>("signals");
   const min = FILTERS.find((f) => f.id === filter)!.min;
-  const { data, mutate, isLoading } = useSWR<{ events: EventWithSources[] }>(
-    api(`/api/events?min=${min}`),
-    fetcher,
-  );
+  const { data, error, mutate, isLoading } = useSWR<{
+    events: EventWithSources[];
+    lastRun: RunStats | null;
+  }>(api(`/api/events?min=${min}`), fetcher);
   const [running, setRunning] = useState(false);
-  const [lastRun, setLastRun] = useState<RunStats | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function runNow() {
     setRunning(true);
+    setRunError(null);
     try {
       const res = await fetch(api("/api/events"), { method: "POST" });
-      const json = (await res.json()) as { stats?: RunStats; error?: string };
-      if (json.stats) setLastRun(json.stats);
-      await mutate();
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) setRunError(json.error ?? `La pasada fallo (HTTP ${res.status}).`);
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "No se pudo lanzar la pasada.");
     } finally {
+      await mutate();
       setRunning(false);
     }
   }
 
   async function sendFeedback(id: string, feedback: Feedback | null) {
-    await fetch(api("/api/events"), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, feedback }),
-    });
-    await mutate();
+    try {
+      await fetch(api("/api/events"), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, feedback }),
+      });
+    } finally {
+      await mutate();
+    }
   }
 
   const list = data?.events ?? [];
+  const lastRun = data?.lastRun ?? null;
 
   return (
     <>
@@ -106,22 +142,36 @@ export default function AlertasPage() {
         ))}
         {lastRun && (
           <span className="ml-auto text-xs text-faint">
-            Ultima pasada: {lastRun.scanned} noticias, {lastRun.clusters} hechos,{" "}
-            {lastRun.created} eventos nuevos, {lastRun.noise} ruido
-            {lastRun.deferred > 0 ? `, ${lastRun.deferred} pendientes` : ""}
+            Ultima pasada ({lastRun.trigger}, {fmtDateTime(lastRun.finishedAt)}): {fmtRun(lastRun)}
           </span>
         )}
       </div>
 
+      {(runError || error) && (
+        <Card className="mb-4 border-down/40 text-sm">
+          <p className="font-medium text-down">
+            {runError ?? "No se pudo cargar el feed"}
+          </p>
+          {error && !runError && (
+            <p className="mt-1 text-xs text-faint">{String(error.message ?? error)}</p>
+          )}
+        </Card>
+      )}
+
       {lastRun?.error && (
         <Card className="mb-4 border-warn/40 text-sm">
-          <p className="font-medium text-warn">El modelo no respondio bien</p>
+          <p className="font-medium text-warn">El modelo no respondio bien en la ultima pasada</p>
           <p className="mt-1 break-words text-muted">{lastRun.error}</p>
           <p className="mt-1 text-xs text-faint">
             Si dice que el modelo no existe o no soporta salida estructurada, cambia el modelo
-            de analisis en Ajustes. Las noticias pendientes se reintentan en la siguiente pasada.
+            de analisis en Ajustes. Lo pendiente se reintenta en la siguiente pasada; lo que
+            falla tres veces se abandona.
           </p>
         </Card>
+      )}
+
+      {lastRun?.warning && !lastRun.error && (
+        <p className="mb-4 text-xs text-faint">{lastRun.warning}</p>
       )}
 
       {isLoading ? (
@@ -213,20 +263,32 @@ function EventCard({
 
       {ev.sources.length > 0 && (
         <ul className="mt-3 space-y-1 text-xs">
-          {ev.sources.map((s) => (
-            <li key={s.id}>
-              <a
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group inline-flex items-start gap-1 text-muted hover:text-accent"
-              >
+          {ev.sources.map((s) => {
+            const href = safeHref(s.url);
+            const body = (
+              <>
                 <span className="shrink-0 text-faint">T{s.tier} · {s.source ?? "fuente"} ·</span>
                 <span className="leading-snug">{s.headline}</span>
-                <ExternalLink size={11} className="mt-0.5 shrink-0 opacity-0 transition group-hover:opacity-60" />
-              </a>
-            </li>
-          ))}
+              </>
+            );
+            return (
+              <li key={s.id}>
+                {href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group inline-flex items-start gap-1 text-muted hover:text-accent"
+                  >
+                    {body}
+                    <ExternalLink size={11} className="mt-0.5 shrink-0 opacity-0 transition group-hover:opacity-60" />
+                  </a>
+                ) : (
+                  <span className="inline-flex items-start gap-1 text-muted">{body}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -251,7 +313,7 @@ function EventCard({
         })}
         {ev.model && (
           <span className="ml-auto text-[11px] text-faint">
-            {ev.model} · {ev.promptVersion}
+            {[ev.model, ev.promptVersion].filter(Boolean).join(" · ")}
           </span>
         )}
       </div>

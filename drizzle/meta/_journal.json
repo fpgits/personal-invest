@@ -29,6 +29,13 @@
       "when": 1788290248204,
       "tag": "0003_intel_events",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788293518014,
+      "tag": "0004_intel_attempts",
+      "breakpoints": true
     }
   ]
 }

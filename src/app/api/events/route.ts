@@ -3,6 +3,7 @@ import { ok, parseBody, protectedRoute } from "@/lib/api";
 import {
   FEEDBACK_VALUES,
   PRIORITIES,
+  lastRun,
   processEvents,
   recentEvents,
   setEventFeedback,
@@ -12,25 +13,42 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-/** Feed de eventos. `min` = prioridad minima (P1..P5), por defecto P4. */
-export const GET = protectedRoute(async (req) => {
-  const params = new URL(req.url).searchParams;
-  const min = params.get("min");
-  const minPriority = PRIORITIES.find((p) => p === min) ?? "P4";
-  const limit = Number(params.get("limit") ?? 50);
-  return Response.json({
-    events: await recentEvents({ minPriority, limit: Math.min(limit, 200) }),
-  });
+const querySchema = z.object({
+  min: z.enum(PRIORITIES).default("P4"),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
-/** Ejecucion manual del motor desde la UI. */
+/** Feed de eventos y resultado de la ultima pasada (cron o manual). */
+export const GET = protectedRoute(async (req) => {
+  const params = Object.fromEntries(new URL(req.url).searchParams);
+  const parsed = querySchema.safeParse(params);
+  if (!parsed.success) {
+    return Response.json(
+      { error: "Parametros invalidos", issues: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+  const [events, run] = await Promise.all([
+    recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit }),
+    lastRun(),
+  ]);
+  return Response.json({ events, lastRun: run });
+});
+
+/** Ejecucion manual del motor desde la UI. Una pasada a la vez. */
 export const POST = protectedRoute(async () => {
-  const stats = await processEvents();
+  const stats = await processEvents({ trigger: "manual" });
+  if (stats.locked) {
+    return Response.json(
+      { error: "Ya hay una pasada en marcha; espera a que termine.", stats },
+      { status: 409 },
+    );
+  }
   return Response.json({ stats, events: await recentEvents({ minPriority: "P4" }) });
 });
 
 const feedbackSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().min(1).max(64),
   feedback: z.enum(FEEDBACK_VALUES).nullable(),
 });
 

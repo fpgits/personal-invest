@@ -4,6 +4,8 @@
  */
 export {
   INTEL_LIMITS,
+  LAST_RUN_KEY,
+  lastRun,
   processEvents,
   recentEvents,
   setEventFeedback,

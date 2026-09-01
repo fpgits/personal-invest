@@ -158,11 +158,20 @@ export const news = sqliteTable(
     processedAt: integer("processed_at"),
     /** Cuando el motor de eventos ya consumio esta noticia (o la descarto). */
     eventProcessedAt: integer("event_processed_at"),
+    /**
+     * Intentos fallidos del motor de eventos sobre esta noticia. Con un tope,
+     * un cluster que siempre falla (moderacion, prompt que el modelo rechaza)
+     * se abandona en vez de bloquear cada pasada.
+     */
+    eventAttempts: integer("event_attempts").notNull().default(0),
     createdAt: integer("created_at").notNull().default(now),
   },
   (t) => [
     uniqueIndex("news_url_idx").on(t.url),
     index("news_published_idx").on(t.publishedAt),
+    index("news_event_pending_idx")
+      .on(t.publishedAt)
+      .where(sql`${t.eventProcessedAt} IS NULL`),
   ],
 );
 

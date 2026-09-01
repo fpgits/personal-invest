@@ -35,6 +35,12 @@ export const SCORE_CAPS = {
   tier4: 45,
   lowConfidenceBelow: 30,
   lowConfidence: 50,
+  /**
+   * Una sola fuente secundaria (tier 3 o 4, un unico host) no puede ser
+   * P1/P2 por mucho que el modelo se entusiasme: para eso hace falta una
+   * fuente de referencia o corroboracion de otro medio.
+   */
+  singleWeakSource: 64,
 } as const;
 
 export type ScoreInput = {
@@ -44,6 +50,8 @@ export type ScoreInput = {
   portfolioRelevance: number;
   sourceTier: SourceTier;
   isNoise: boolean;
+  /** Hosts distintos entre las fuentes del evento (corroboracion). */
+  distinctHosts?: number;
 };
 
 export function priorityFor(score: number): Priority {
@@ -67,6 +75,9 @@ export function scoreSignal(i: ScoreInput): { score: number; priority: Priority 
   if (i.confidence < SCORE_CAPS.lowConfidenceBelow) {
     score = Math.min(score, SCORE_CAPS.lowConfidence);
   }
+  if (i.sourceTier >= 3 && (i.distinctHosts ?? 1) < 2) {
+    score = Math.min(score, SCORE_CAPS.singleWeakSource);
+  }
 
   score = Math.round(score * 10) / 10;
   return { score, priority: priorityFor(score) };
@@ -83,6 +94,7 @@ export type RelevanceContext = {
 /**
  * 0..100 segun lo que te toca: una posicion grande manda, la watchlist cuenta,
  * un activo que solo conoces de pasada casi nada, y lo que no sigues, cero.
+ * Una posicion residual (polvo) vale lo mismo que la watchlist, no mas.
  */
 export function portfolioRelevance(symbols: string[], ctx: RelevanceContext): number {
   const up = (s: string) => s.toUpperCase();
@@ -94,7 +106,7 @@ export function portfolioRelevance(symbols: string[], ctx: RelevanceContext): nu
   for (const raw of symbols) {
     const s = up(raw);
     let r = 0;
-    if (weights.has(s)) r = 60 + Math.min(40, (weights.get(s) ?? 0) * 2);
+    if (weights.has(s)) r = 40 + Math.min(60, (weights.get(s) ?? 0) * 3);
     else if (watch.has(s)) r = 40;
     else if (known.has(s)) r = 15;
     best = Math.max(best, r);

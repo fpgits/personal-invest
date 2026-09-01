@@ -4,52 +4,79 @@ import type { SourceTier } from "./types";
  * Fiabilidad por fuente. No mide calidad editorial: mide cuanto puede pesar
  * lo que dice como HECHO.
  *
- *  1  Primaria: reguladores, filings, comunicados oficiales de la empresa.
- *  2  Medios financieros de referencia con verificacion propia.
+ *  1  Primaria: reguladores y filings (SEC, Fed, BCE...).
+ *  2  Medios financieros de referencia con verificacion propia, y comunicados
+ *     oficiales por wire (son la voz de la empresa, pero autoreportados y
+ *     cualquiera con tarjeta puede emitir uno: no merecen el tier 1).
  *  3  Secundarios, agregadores y opinion. Lo normal cuando no se conoce.
  *  4  Social / no verificado. Nunca se presenta como hecho.
  *
- * Se compara en minusculas por subcadena contra el nombre de la fuente y el
- * host de la URL, asi "Reuters", "reuters.com" y "Thomson Reuters" caen igual.
+ * El host de la URL manda y se compara por sufijo exacto (`x.com` no puede
+ * casar con `ir.netflix.com`, `ft.com` no casa con `news.microsoft.com`).
+ * El nombre de la fuente es el respaldo y se compara por palabra completa.
  */
-const TIERS: Array<[SourceTier, string[]]> = [
-  [
-    1,
-    [
+type Rule = { tier: SourceTier; hosts: string[]; names: string[] };
+
+const RULES: Rule[] = [
+  {
+    tier: 1,
+    hosts: [
       "sec.gov",
-      "sec ",
-      "securities and exchange",
-      "federalreserve",
-      "federal reserve",
-      "ecb.europa",
+      "federalreserve.gov",
+      "ecb.europa.eu",
       "europa.eu",
       "treasury.gov",
       "ftc.gov",
-      "doj.gov",
+      "justice.gov",
       "fda.gov",
-      "globenewswire",
-      "prnewswire",
-      "pr newswire",
-      "businesswire",
-      "business wire",
-      "accesswire",
-      "newsfile",
+      "cnmv.es",
+      "bde.es",
     ],
-  ],
-  [
-    2,
-    [
+    names: [
+      "sec",
+      "securities and exchange commission",
+      "federal reserve",
+      "european central bank",
+      "cnmv",
+    ],
+  },
+  {
+    tier: 2,
+    hosts: [
+      "reuters.com",
+      "bloomberg.com",
+      "ft.com",
+      "wsj.com",
+      "dowjones.com",
+      "cnbc.com",
+      "barrons.com",
+      "apnews.com",
+      "nikkei.com",
+      "economist.com",
+      "marketwatch.com",
+      "theinformation.com",
+      "handelsblatt.com",
+      "expansion.com",
+      "eleconomista.es",
+      "globenewswire.com",
+      "prnewswire.com",
+      "businesswire.com",
+      "accesswire.com",
+      "newsfilecorp.com",
+    ],
+    names: [
       "reuters",
+      "thomson reuters",
       "bloomberg",
       "financial times",
-      "ft.com",
-      "wsj",
       "wall street journal",
+      "wsj",
       "dow jones",
       "cnbc",
-      "barron",
+      "barron's",
+      "barrons",
       "associated press",
-      "apnews",
+      "ap news",
       "nikkei",
       "the economist",
       "marketwatch",
@@ -57,15 +84,40 @@ const TIERS: Array<[SourceTier, string[]]> = [
       "handelsblatt",
       "expansion",
       "el economista",
+      "globenewswire",
+      "pr newswire",
+      "prnewswire",
+      "business wire",
+      "businesswire",
+      "accesswire",
+      "newsfile",
     ],
-  ],
-  [
-    4,
-    [
-      "twitter",
+  },
+  {
+    tier: 4,
+    hosts: [
+      "twitter.com",
       "x.com",
-      "reddit",
+      "t.co",
+      "reddit.com",
       "medium.com",
+      "substack.com",
+      "youtube.com",
+      "youtu.be",
+      "t.me",
+      "telegram.org",
+      "discord.com",
+      "stocktwits.com",
+      "4chan.org",
+      "tiktok.com",
+      "facebook.com",
+      "threads.net",
+    ],
+    names: [
+      "twitter",
+      "x",
+      "reddit",
+      "medium",
       "substack",
       "youtube",
       "telegram",
@@ -74,15 +126,23 @@ const TIERS: Array<[SourceTier, string[]]> = [
       "4chan",
       "tiktok",
       "facebook",
+      "threads",
     ],
-  ],
+  },
 ];
 
 export function sourceTier(source: string | null | undefined, url?: string): SourceTier {
-  const hay = `${source ?? ""} ${hostOf(url)}`.toLowerCase();
-  if (!hay.trim()) return 3;
-  for (const [tier, needles] of TIERS) {
-    if (needles.some((n) => hay.includes(n))) return tier;
+  const host = hostOf(url);
+  if (host) {
+    for (const rule of RULES) {
+      if (rule.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return rule.tier;
+    }
+  }
+  const name = normalizeName(source);
+  if (name) {
+    for (const rule of RULES) {
+      if (rule.names.some((n) => name.includes(` ${n} `))) return rule.tier;
+    }
   }
   return 3;
 }
@@ -101,11 +161,25 @@ export const TIER_RELIABILITY: Record<SourceTier, number> = {
   4: 25,
 };
 
-function hostOf(url?: string): string {
+export function hostOf(url?: string | null): string {
   if (!url) return "";
   try {
-    return new URL(url).hostname;
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return u.hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return "";
   }
+}
+
+/** " Reuters Blog " → " reuters blog " para casar por palabra completa. */
+function normalizeName(source: string | null | undefined): string {
+  const s = (source ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9' ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return s ? ` ${s} ` : "";
 }
