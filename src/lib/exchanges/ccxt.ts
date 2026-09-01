@@ -76,13 +76,22 @@ export async function testConnection(
   }
 }
 
-export type ExchangeBalance = { currency: string; amount: number };
+export type ExchangeBalance = {
+  currency: string;
+  amount: number;
+  /** true si es efectivo (stablecoin o divisa), no una posicion de inversion. */
+  isCash: boolean;
+};
 
 export async function fetchBalances(ex: Exchange): Promise<ExchangeBalance[]> {
   const balance = await ex.fetchBalance();
   return Object.entries(balance.total ?? {})
-    .filter(([code, v]) => typeof v === "number" && v > 1e-8 && !isFiat(code))
-    .map(([currency, amount]) => ({ currency, amount: amount as number }));
+    .filter(([, v]) => typeof v === "number" && v > 1e-8)
+    .map(([currency, amount]) => ({
+      currency,
+      amount: amount as number,
+      isCash: isCash(currency),
+    }));
 }
 
 export type ExchangeTrade = {
@@ -145,10 +154,15 @@ export async function fetchTrades(
   return out.sort((a, b) => a.timestamp - b.timestamp);
 }
 
-const FIAT = new Set(["USD", "EUR", "GBP", "USDT", "USDC", "DAI", "BUSD", "TUSD"]);
+// Efectivo: divisas y stablecoins. No son posiciones de inversion, se muestran
+// como saldo en efectivo y valen 1:1 en USD.
+const CASH = new Set([
+  "USD", "EUR", "GBP",
+  "USDT", "USDC", "DAI", "BUSD", "TUSD", "FDUSD", "USDP", "PYUSD", "USDD", "GUSD",
+]);
 
-export function isFiat(code: string) {
-  return FIAT.has(code.toUpperCase());
+export function isCash(code: string) {
+  return CASH.has(code.toUpperCase());
 }
 
 /** Quita cualquier rastro de claves de los mensajes de error de ccxt. */

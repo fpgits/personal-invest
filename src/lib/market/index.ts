@@ -57,8 +57,10 @@ export async function refreshQuotes(
   const errors: string[] = [];
   const results = new Map<string, Quote>();
 
-  const cryptos = assets.filter(isCrypto);
-  const equities = assets.filter((a) => !isCrypto(a));
+  // El efectivo vale 1:1 y no se consulta a ningun proveedor.
+  const priceable = assets.filter((a) => a.assetClass !== "cash");
+  const cryptos = priceable.filter(isCrypto);
+  const equities = priceable.filter((a) => !isCrypto(a));
 
   if (cryptos.length > 0) {
     try {
@@ -155,7 +157,9 @@ export async function getQuotes(
   assets: Asset[],
 ): Promise<Record<string, CachedQuote>> {
   const cached = await getCachedQuotes(assets);
-  const stale = assets.filter((a) => !cached[a.id] || cached[a.id].stale);
+  const stale = assets.filter(
+    (a) => a.assetClass !== "cash" && (!cached[a.id] || cached[a.id].stale),
+  );
   if (stale.length === 0) return cached;
 
   await refreshQuotes(stale).catch(() => ({ updated: 0, errors: [] }));

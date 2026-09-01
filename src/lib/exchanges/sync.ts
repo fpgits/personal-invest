@@ -5,7 +5,7 @@ import { makeAssetResolver } from "@/lib/assets";
 import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
 import { chunk, id } from "@/lib/utils";
-import { cleanError, clientFor, fetchBalances, fetchTrades, isFiat } from "./ccxt";
+import { cleanError, clientFor, fetchBalances, fetchTrades, isCash } from "./ccxt";
 
 const RECONCILE_PREFIX = "reconcile-";
 
@@ -46,7 +46,9 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
   try {
     const ex = await clientFor(account);
     const balances = await fetchBalances(ex);
-    const currencies = balances.map((b) => b.currency);
+    // Solo buscamos historial de trades de las monedas de inversion, no del
+    // efectivo (no tiene sentido un par USDT/USDT).
+    const currencies = balances.filter((b) => !b.isCash).map((b) => b.currency);
 
     // Solo pedimos trades nuevos desde el ultimo sync, con un dia de solape.
     const since = account.lastSyncAt
@@ -59,7 +61,7 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
     /* ---------- Operaciones, en tandas ---------- */
     const txRows: (typeof transactions.$inferInsert)[] = [];
     for (const t of trades) {
-      if (isFiat(t.base)) continue;
+      if (isCash(t.base)) continue;
       const asset = await resolveAsset(t.base, "crypto");
       txRows.push({
         id: id(),
@@ -127,32 +129,39 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
       realByAsset.set(r.assetId, list);
     }
 
-    // Balance real del exchange = la verdad. USDT y demas estables no son
-    // posiciones, se saltan.
+    // Balance real del exchange = la verdad. El efectivo (USDT, USD...) entra
+    // como clase 'cash'; el resto como cripto.
     const targetQty = new Map<string, number>();
+    const cashAssetIds = new Set<string>();
     for (const b of balances) {
-      if (isFiat(b.currency)) continue;
-      const asset = await resolveAsset(b.currency, "crypto");
+      const asset = await resolveAsset(b.currency, b.isCash ? "cash" : "crypto");
       targetQty.set(asset.id, b.amount);
+      if (b.isCash) cashAssetIds.add(asset.id);
     }
 
     const plugs = buildReconciliation(realByAsset, targetQty);
-    const adjustments: (typeof transactions.$inferInsert)[] = plugs.map((pl) => ({
-      id: id(),
-      accountId: account.id,
-      assetId: pl.assetId,
-      type: pl.direction,
-      quantity: pl.quantity,
-      // Coste desconocido a proposito: el exchange no nos da el precio de
-      // entrada de un deposito. La posicion se marca "coste estimado".
-      price: 0,
-      fee: 0,
-      currency: "USD",
-      executedAt: Date.now(),
-      externalId: `${RECONCILE_PREFIX}${pl.assetId}`,
-      source: "sync",
-      note: "Ajuste contra el balance real del exchange. Coste de entrada desconocido.",
-    }));
+    const adjustments: (typeof transactions.$inferInsert)[] = plugs.map((pl) => {
+      const cash = cashAssetIds.has(pl.assetId);
+      return {
+        id: id(),
+        accountId: account.id,
+        assetId: pl.assetId,
+        type: pl.direction,
+        quantity: pl.quantity,
+        // El efectivo vale 1:1, asi que su ajuste entra a precio 1 (sin P&L).
+        // Para cripto el coste de un deposito es desconocido: precio 0 y la
+        // posicion se marca "coste estimado".
+        price: cash && pl.direction === "transfer_in" ? 1 : 0,
+        fee: 0,
+        currency: "USD",
+        executedAt: Date.now(),
+        externalId: `${RECONCILE_PREFIX}${pl.assetId}`,
+        source: "sync",
+        note: cash
+          ? "Saldo en efectivo del exchange."
+          : "Ajuste contra el balance real del exchange. Coste de entrada desconocido.",
+      };
+    });
 
     for (const part of chunk(adjustments, INSERT_CHUNK)) {
       await db.insert(transactions).values(part).onConflictDoNothing();

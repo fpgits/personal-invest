@@ -303,6 +303,51 @@ async function run() {
     } else console.log("  ok  ajuste es salida hacia el balance real (dust)");
   }
 
+  console.log("\n14. Efectivo: vale 1:1, sin P&L y sin depender del proveedor");
+  {
+    const CASH: Asset = {
+      id: "cash:USDT",
+      symbol: "USDT",
+      name: "TetherUS",
+      assetClass: "cash",
+      currency: "USD",
+      providerId: "USDT",
+      logoUrl: null,
+      createdAt: 0,
+    };
+    const rows = [
+      {
+        asset: CASH,
+        tx: {
+          id: "c1",
+          accountId: "acc",
+          assetId: CASH.id,
+          type: "transfer_in" as const,
+          quantity: 100,
+          price: 1,
+          fee: 0,
+          currency: "USD",
+          executedAt: 0,
+          externalId: null,
+          source: "sync",
+          note: null,
+          createdAt: 0,
+        },
+      },
+    ];
+    // Sin quotes a proposito: el efectivo no consulta a ningun proveedor.
+    const p = await buildSummary(rows, "average", "USD", quotesFor({}));
+    const pos = p.positions[0];
+    near(pos?.quantity ?? -1, 100, "cantidad efectivo");
+    near(pos?.value ?? -1, 100, "valor = cantidad (1:1)");
+    near(pos?.unrealizedPnl ?? -1, 0, "efectivo sin P&L");
+    checks++;
+    if (pos?.priceStale) {
+      failures++;
+      console.error("  FALLO: el efectivo no deberia estar 'stale'");
+    } else console.log("  ok  efectivo nunca esta desactualizado");
+  }
+
   console.log(
     `\n${failures === 0 ? "TODO OK" : "HAY FALLOS"}: ${checks - failures}/${checks} comprobaciones\n`,
   );

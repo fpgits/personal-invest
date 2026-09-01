@@ -13,12 +13,14 @@ export const CLASS_COLORS: Record<string, string> = {
   equity: "#3987e5",
   crypto: "#d95926",
   etf: "#199e70",
+  cash: "#8b94a3",
 };
 
 export const CLASS_LABELS: Record<string, string> = {
   equity: "Bolsa",
   crypto: "Cripto",
   etf: "ETF",
+  cash: "Efectivo",
 };
 
 export function classColor(assetClass: string) {

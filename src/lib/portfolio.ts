@@ -208,7 +208,9 @@ export async function buildSummary(
     apply(accs.get(asset.id)!, tx, method);
   }
 
+  // El efectivo vale 1:1 y no se cotiza; se excluye de la consulta de precios.
   const held = [...assetById.values()].filter((a) => {
+    if (a.assetClass === "cash") return false;
     const acc = accs.get(a.id);
     return ((acc?.quantity ?? 0) + (acc?.unknownQty ?? 0)) > EPS;
   });
@@ -220,8 +222,10 @@ export async function buildSummary(
 
   for (const [assetId, acc] of accs) {
     const asset = assetById.get(assetId)!;
+    // El efectivo (USDT, USD...) vale 1:1 y nunca esta "desactualizado".
+    const isCashAsset = asset.assetClass === "cash";
     const q = quotes[assetId];
-    const price = q?.price ?? 0;
+    const price = isCashAsset ? 1 : q?.price ?? 0;
 
     // Cantidad total = lo de coste conocido + los depositos sin precio.
     const quantity = acc.quantity + acc.unknownQty;
@@ -252,7 +256,7 @@ export async function buildSummary(
       dayChange: quantity * (q?.change ?? 0),
       dayChangePct: q?.changePct ?? 0,
       weight: 0,
-      priceStale: q?.stale ?? true,
+      priceStale: isCashAsset ? false : q?.stale ?? true,
       priceUpdatedAt: q?.updatedAt ?? null,
       costEstimated,
     };

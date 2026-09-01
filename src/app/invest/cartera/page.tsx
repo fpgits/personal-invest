@@ -13,7 +13,7 @@ import {
 } from "@/components/ui";
 import { db } from "@/db";
 import { accounts, assets, transactions } from "@/db/schema";
-import { computePortfolio } from "@/lib/portfolio";
+import { computePortfolio, type Position } from "@/lib/portfolio";
 import { missingRequired } from "@/lib/setup";
 import { SetupNotice } from "@/components/setup-notice";
 import { fmtDate, fmtMoney, fmtQty } from "@/lib/utils";
@@ -28,6 +28,130 @@ const TYPE_LABELS: Record<string, string> = {
   transfer_in: "Deposito",
   transfer_out: "Retiro",
 };
+
+// Cada seccion agrupa una o varias clases de activo. El efectivo se muestra
+// aparte y sin columnas de coste/P&L: es dinero, no una posicion con ganancia.
+const SECTIONS: Array<{ label: string; classes: string[]; cash?: boolean }> = [
+  { label: "Bolsa", classes: ["equity", "etf"] },
+  { label: "Cripto", classes: ["crypto"] },
+  { label: "Efectivo", classes: ["cash"], cash: true },
+];
+
+function PositionSection({
+  label,
+  positions,
+  currency,
+  cash = false,
+}: {
+  label: string;
+  positions: Position[];
+  currency: string;
+  cash?: boolean;
+}) {
+  if (positions.length === 0) return null;
+  const value = positions.reduce((s, p) => s + p.value, 0);
+  const cols = cash ? 4 : 7;
+
+  return (
+    <Card padded={false} className="mt-4 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
+        <div className="flex items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 rounded-sm"
+            style={{ background: classColor(positions[0].asset.assetClass) }}
+            aria-hidden
+          />
+          <h2 className="text-sm font-semibold">{label}</h2>
+          <span className="text-xs text-faint">{positions.length}</span>
+        </div>
+        <span className="tnum text-sm font-medium">
+          {fmtMoney(value, currency)}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className={`w-full ${cash ? "min-w-[420px]" : "min-w-[760px]"} text-sm`}>
+          <thead>
+            <tr className="border-b border-border text-left text-xs text-faint">
+              <th className="px-5 py-3 font-medium">Activo</th>
+              <th className="px-3 py-3 text-right font-medium">Cantidad</th>
+              {!cash && (
+                <>
+                  <th className="px-3 py-3 text-right font-medium">Coste medio</th>
+                  <th className="px-3 py-3 text-right font-medium">Precio</th>
+                </>
+              )}
+              <th className="px-3 py-3 text-right font-medium">Valor</th>
+              <th className="px-3 py-3 text-right font-medium">Peso</th>
+              {!cash && <th className="px-5 py-3 text-right font-medium">P&L</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {positions.map((p) => (
+              <tr key={p.asset.id} className="transition hover:bg-surface-2">
+                <td className="px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    <AssetIcon
+                      symbol={p.asset.symbol}
+                      logoUrl={p.asset.logoUrl}
+                      size={28}
+                    />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{p.asset.symbol}</span>
+                        {!cash && <ClassBadge assetClass={p.asset.assetClass} />}
+                        {p.priceStale && <Badge tone="warn">precio viejo</Badge>}
+                        {p.costEstimated && (
+                          <Badge tone="neutral">coste estimado</Badge>
+                        )}
+                      </div>
+                      <p className="truncate text-xs text-faint">{p.asset.name}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="tnum px-3 py-3 text-right">{fmtQty(p.quantity)}</td>
+                {!cash && (
+                  <>
+                    <td className="tnum px-3 py-3 text-right text-muted">
+                      {fmtMoney(p.avgCost, currency)}
+                    </td>
+                    <td className="tnum px-3 py-3 text-right">
+                      {fmtMoney(p.price, currency)}
+                    </td>
+                  </>
+                )}
+                <td className="tnum px-3 py-3 text-right font-medium">
+                  {fmtMoney(p.value, currency)}
+                </td>
+                <td className="tnum px-3 py-3 text-right text-muted">
+                  {p.weight.toFixed(1)}%
+                </td>
+                {!cash && (
+                  <td className="px-5 py-3 text-right">
+                    <Delta
+                      value={p.unrealizedPnl}
+                      pct={p.unrealizedPct}
+                      currency={currency}
+                    />
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-border-strong bg-surface-2 text-sm font-medium">
+              <td className="px-5 py-3">Subtotal</td>
+              <td colSpan={cols - 3} />
+              <td className="tnum px-3 py-3 text-right">
+                {fmtMoney(value, currency)}
+              </td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </Card>
+  );
+}
 
 export default async function CarteraPage() {
   const missing = missingRequired();
@@ -68,105 +192,32 @@ export default async function CarteraPage() {
           pestana de Cuentas.
         </EmptyState>
       ) : (
-        <Card padded={false} className="overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-faint">
-                  <th className="px-5 py-3 font-medium">Activo</th>
-                  <th className="px-3 py-3 text-right font-medium">Cantidad</th>
-                  <th className="px-3 py-3 text-right font-medium">Coste medio</th>
-                  <th className="px-3 py-3 text-right font-medium">Precio</th>
-                  <th className="px-3 py-3 text-right font-medium">Valor</th>
-                  <th className="px-3 py-3 text-right font-medium">Peso</th>
-                  <th className="px-5 py-3 text-right font-medium">P&L</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {portfolio.positions.map((p) => (
-                  <tr key={p.asset.id} className="transition hover:bg-surface-2">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3">
-                        <AssetIcon
-                          symbol={p.asset.symbol}
-                          logoUrl={p.asset.logoUrl}
-                          size={28}
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{p.asset.symbol}</span>
-                            <ClassBadge assetClass={p.asset.assetClass} />
-                            {p.priceStale && (
-                              <Badge tone="warn">precio viejo</Badge>
-                            )}
-                            {p.costEstimated && (
-                              <Badge tone="neutral">coste estimado</Badge>
-                            )}
-                          </div>
-                          <p className="truncate text-xs text-faint">
-                            {p.asset.name}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="tnum px-3 py-3 text-right">
-                      {fmtQty(p.quantity)}
-                    </td>
-                    <td className="tnum px-3 py-3 text-right text-muted">
-                      {fmtMoney(p.avgCost, portfolio.currency)}
-                    </td>
-                    <td className="tnum px-3 py-3 text-right">
-                      {fmtMoney(p.price, portfolio.currency)}
-                    </td>
-                    <td className="tnum px-3 py-3 text-right font-medium">
-                      {fmtMoney(p.value, portfolio.currency)}
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <span className="tnum text-xs text-muted">
-                          {p.weight.toFixed(1)}%
-                        </span>
-                        <span className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2">
-                          <span
-                            className="block h-full rounded-full"
-                            style={{
-                              width: `${p.weight}%`,
-                              background: classColor(p.asset.assetClass),
-                            }}
-                          />
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <Delta
-                        value={p.unrealizedPnl}
-                        pct={p.unrealizedPct}
-                        currency={portfolio.currency}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t border-border-strong bg-surface-2 text-sm font-medium">
-                  <td className="px-5 py-3">Total</td>
-                  <td colSpan={3} />
-                  <td className="tnum px-3 py-3 text-right">
-                    {fmtMoney(portfolio.totalValue, portfolio.currency)}
-                  </td>
-                  <td />
-                  <td className="px-5 py-3 text-right">
-                    <Delta
-                      value={portfolio.unrealizedPnl}
-                      pct={portfolio.unrealizedPct}
-                      currency={portfolio.currency}
-                    />
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+        <>
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-5 py-3">
+            <span className="text-sm text-muted">Valor total</span>
+            <div className="flex items-baseline gap-3">
+              <span className="tnum text-base font-semibold">
+                {fmtMoney(portfolio.totalValue, portfolio.currency)}
+              </span>
+              <Delta
+                value={portfolio.unrealizedPnl}
+                pct={portfolio.unrealizedPct}
+                currency={portfolio.currency}
+              />
+            </div>
           </div>
-        </Card>
+          {SECTIONS.map((s) => (
+            <PositionSection
+              key={s.label}
+              label={s.label}
+              cash={s.cash}
+              currency={portfolio.currency}
+              positions={portfolio.positions.filter((p) =>
+                s.classes.includes(p.asset.assetClass),
+              )}
+            />
+          ))}
+        </>
       )}
 
       {portfolio.closed.length > 0 && (

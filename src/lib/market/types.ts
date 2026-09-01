@@ -1,4 +1,4 @@
-export type AssetClass = "equity" | "etf" | "crypto";
+export type AssetClass = "equity" | "etf" | "crypto" | "cash";
 
 export type Quote = {
   price: number;
