@@ -50,10 +50,17 @@ export async function login(password: string): Promise<boolean> {
 
 export async function logout() {
   const jar = await cookies();
-  jar.delete({
-    name: cookieName(),
-    path: "/",
-    domain: process.env.AUTH_COOKIE_DOMAIN || undefined,
+  // Ojo: NO usar jar.delete(). La cookie de produccion lleva el prefijo
+  // __Secure-, y el navegador solo acepta modificarla (borrarla incluida) si
+  // el Set-Cookie trae el atributo Secure. jar.delete() no lo pone, asi que el
+  // borrado se rechaza y la sesion sobrevive. Vencemos la cookie con los mismos
+  // atributos (Secure incluido) y maxAge 0.
+  jar.set(cookieName(), "", {
+    ...sessionCookieAttributes({
+      isProduction,
+      domain: process.env.AUTH_COOKIE_DOMAIN || undefined,
+    }),
+    maxAge: 0,
   });
 }
 

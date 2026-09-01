@@ -305,47 +305,69 @@ async function run() {
 
   console.log("\n14. Efectivo: vale 1:1, sin P&L y sin depender del proveedor");
   {
-    const CASH: Asset = {
-      id: "cash:USDT",
-      symbol: "USDT",
-      name: "TetherUS",
+    const cashAsset = (id: string, symbol: string): Asset => ({
+      id,
+      symbol,
+      name: symbol,
       assetClass: "cash",
       currency: "USD",
-      providerId: "USDT",
+      providerId: symbol,
       logoUrl: null,
       createdAt: 0,
-    };
-    const rows = [
-      {
-        asset: CASH,
-        tx: {
-          id: "c1",
-          accountId: "acc",
-          assetId: CASH.id,
-          type: "transfer_in" as const,
-          quantity: 100,
-          price: 1,
-          fee: 0,
-          currency: "USD",
-          executedAt: 0,
-          externalId: null,
-          source: "sync",
-          note: null,
-          createdAt: 0,
-        },
+    });
+    const cashRow = (
+      asset: Asset,
+      qty: number,
+      accountType: string,
+    ): { tx: Transaction; asset: Asset; accountType: string } => ({
+      asset,
+      accountType,
+      tx: {
+        id: `c-${asset.id}`,
+        accountId: "acc",
+        assetId: asset.id,
+        type: "transfer_in",
+        quantity: qty,
+        price: 1,
+        fee: 0,
+        currency: "USD",
+        executedAt: 0,
+        externalId: null,
+        source: "sync",
+        note: null,
+        createdAt: 0,
       },
+    });
+
+    // USDT en un exchange y USD en un broker.
+    const USDT = cashAsset("cash:USDT", "USDT");
+    const USD = cashAsset("cash:USD", "USD");
+    const rows = [
+      cashRow(USDT, 100, "exchange"),
+      cashRow(USD, 50, "broker"),
     ];
     // Sin quotes a proposito: el efectivo no consulta a ningun proveedor.
     const p = await buildSummary(rows, "average", "USD", quotesFor({}));
-    const pos = p.positions[0];
-    near(pos?.quantity ?? -1, 100, "cantidad efectivo");
-    near(pos?.value ?? -1, 100, "valor = cantidad (1:1)");
-    near(pos?.unrealizedPnl ?? -1, 0, "efectivo sin P&L");
+    const usdt = p.positions.find((x) => x.asset.symbol === "USDT")!;
+    const usd = p.positions.find((x) => x.asset.symbol === "USD")!;
+    near(usdt.value, 100, "USDT valor = cantidad (1:1)");
+    near(usdt.unrealizedPnl, 0, "USDT sin P&L");
     checks++;
-    if (pos?.priceStale) {
+    if (usdt.priceStale) {
       failures++;
       console.error("  FALLO: el efectivo no deberia estar 'stale'");
     } else console.log("  ok  efectivo nunca esta desactualizado");
+    // El efectivo cae en el lado de su cuenta:
+    checks++;
+    if (usdt.group !== "crypto") {
+      failures++;
+      console.error(`  FALLO: USDT group ${usdt.group} != crypto`);
+    } else console.log("  ok  USDT de exchange -> lado cripto");
+    checks++;
+    if (usd.group !== "equity") {
+      failures++;
+      console.error(`  FALLO: USD group ${usd.group} != equity`);
+    } else console.log("  ok  USD de broker -> lado bolsa");
   }
 
   console.log(

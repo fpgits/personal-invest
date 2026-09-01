@@ -1,6 +1,12 @@
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { assets, transactions, type Asset, type Transaction } from "@/db/schema";
+import {
+  accounts,
+  assets,
+  transactions,
+  type Asset,
+  type Transaction,
+} from "@/db/schema";
 import { getQuotes, type CachedQuote } from "./market";
 import { resolveBaseCurrency, resolveCostMethod } from "./settings";
 
@@ -29,6 +35,12 @@ export type Position = {
    * de esa parte es ~0 y el usuario deberia fijar el coste real si lo sabe.
    */
   costEstimated: boolean;
+  /**
+   * Clase para agrupar en la UI. Casi siempre es assetClass, pero el EFECTIVO
+   * cuenta en el lado de su cuenta: el USDT de un exchange va con "crypto", el
+   * USD de un broker va con "equity". Asi el cash no es un cajon aparte.
+   */
+  group: string;
 };
 
 export type ClassBreakdown = {
@@ -82,6 +94,23 @@ function emptyAcc(): Acc {
 }
 
 const EPS = 1e-9;
+
+const STABLECOINS = new Set([
+  "USDT", "USDC", "DAI", "BUSD", "TUSD", "FDUSD", "USDP", "PYUSD", "USDD", "GUSD",
+]);
+
+/**
+ * A que lado pertenece una posicion al agrupar (Bolsa vs Cripto). Lo normal es
+ * su propia clase; el EFECTIVO se atribuye al lado de la cuenta donde vive:
+ * exchange -> cripto, broker -> bolsa. Sin dato de cuenta, cae al tipo de
+ * moneda (stablecoin -> cripto, divisa -> bolsa).
+ */
+function groupFor(asset: Asset, accountType?: string | null): string {
+  if (asset.assetClass !== "cash") return asset.assetClass;
+  if (accountType === "exchange") return "crypto";
+  if (accountType === "broker") return "equity";
+  return STABLECOINS.has(asset.symbol.toUpperCase()) ? "crypto" : "equity";
+}
 
 /**
  * Aplica una transaccion al acumulador de un activo.
@@ -178,9 +207,10 @@ export async function computePortfolio(): Promise<PortfolioSummary> {
   ]);
 
   const rows = await db
-    .select({ tx: transactions, asset: assets })
+    .select({ tx: transactions, asset: assets, accountType: accounts.type })
     .from(transactions)
     .innerJoin(assets, eq(transactions.assetId, assets.id))
+    .innerJoin(accounts, eq(transactions.accountId, accounts.id))
     .orderBy(asc(transactions.executedAt));
 
   return buildSummary(rows, method, currency);
@@ -191,7 +221,7 @@ export async function computePortfolio(): Promise<PortfolioSummary> {
  * `quoteProvider` se inyecta en los tests para no depender de la red.
  */
 export async function buildSummary(
-  rows: Array<{ tx: Transaction; asset: Asset }>,
+  rows: Array<{ tx: Transaction; asset: Asset; accountType?: string | null }>,
   method: "average" | "fifo",
   currency: string,
   quoteProvider: (
@@ -201,9 +231,12 @@ export async function buildSummary(
 ): Promise<PortfolioSummary> {
   const accs = new Map<string, Acc>();
   const assetById = new Map<string, Asset>();
+  // Tipo de cuenta por activo, para saber en que lado cae el efectivo.
+  const accountTypeByAsset = new Map<string, string>();
 
-  for (const { tx, asset } of rows) {
+  for (const { tx, asset, accountType } of rows) {
     assetById.set(asset.id, asset);
+    if (accountType) accountTypeByAsset.set(asset.id, accountType);
     if (!accs.has(asset.id)) accs.set(asset.id, emptyAcc());
     apply(accs.get(asset.id)!, tx, method);
   }
@@ -259,6 +292,7 @@ export async function buildSummary(
       priceStale: isCashAsset ? false : q?.stale ?? true,
       priceUpdatedAt: q?.updatedAt ?? null,
       costEstimated,
+      group: groupFor(asset, accountTypeByAsset.get(assetId)),
     };
 
     if (quantity > EPS) {
@@ -286,9 +320,11 @@ export async function buildSummary(
   const fees = [...open, ...closed].reduce((s, p) => s + p.fees, 0);
   const dayChange = open.reduce((s, p) => s + p.dayChange, 0);
 
+  // Reparto por "lado": el efectivo ya viene atribuido a bolsa o cripto via
+  // p.group, asi que no aparece como una clase separada.
   const classMap = new Map<string, { value: number; pnl: number }>();
   for (const p of open) {
-    const k = p.asset.assetClass;
+    const k = p.group;
     const cur = classMap.get(k) ?? { value: 0, pnl: 0 };
     cur.value += p.value;
     cur.pnl += p.unrealizedPnl;

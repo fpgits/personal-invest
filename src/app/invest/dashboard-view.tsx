@@ -13,12 +13,13 @@ type ChartPoint = { date: string; value: number; cost: number };
 
 type Group = { key: string; label: string; classes: string[] | null };
 
-// "Bolsa" agrupa acciones y ETFs. "Todo" no filtra.
+// "Bolsa" agrupa acciones, ETFs y el efectivo del broker. "Cripto" agrupa
+// cripto y el efectivo del exchange. El efectivo cuenta en su lado (p.group),
+// no como cajon aparte. "Todo" no filtra.
 const GROUPS: Group[] = [
   { key: "all", label: "Todo", classes: null },
   { key: "bolsa", label: "Bolsa", classes: ["equity", "etf"] },
   { key: "cripto", label: "Cripto", classes: ["crypto"] },
-  { key: "efectivo", label: "Efectivo", classes: ["cash"] },
 ];
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -44,14 +45,14 @@ export function DashboardView({
       GROUPS.filter(
         (g) =>
           g.classes === null ||
-          positions.some((p) => g.classes!.includes(p.asset.assetClass)),
+          positions.some((p) => g.classes!.includes(p.group)),
       ),
     [positions],
   );
 
   const group = tabs.find((g) => g.key === sel) ?? tabs[0];
   const inGroup = (p: Position) =>
-    !group.classes || group.classes.includes(p.asset.assetClass);
+    !group.classes || group.classes.includes(p.group);
   const isAll = group.key === "all";
 
   const view = useMemo(() => {
