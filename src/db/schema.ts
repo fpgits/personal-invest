@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -155,6 +156,8 @@ export const news = sqliteTable(
     /** JSON array de symbols relacionados */
     tickers: text("tickers").notNull().default("[]"),
     processedAt: integer("processed_at"),
+    /** Cuando el motor de eventos ya consumio esta noticia (o la descarto). */
+    eventProcessedAt: integer("event_processed_at"),
     createdAt: integer("created_at").notNull().default(now),
   },
   (t) => [
@@ -236,8 +239,87 @@ export const authAttempts = sqliteTable("auth_attempts", {
   windowStart: integer("window_start").notNull(),
 });
 
+/**
+ * Evento estructurado extraido de una o mas noticias. Es el objeto analitico
+ * central del motor de inteligencia: varias noticias sobre lo mismo (Reuters,
+ * Bloomberg, CNBC...) se agrupan en UN evento con varias evidencias, en vez de
+ * generar una alerta por titular.
+ *
+ * Separa estrictamente HECHO (fact) de INFERENCIA (inference) y de la
+ * EVALUACION de la IA (assessment). Toda conclusion queda trazable a las
+ * noticias fuente via event_sources.
+ */
+export const events = sqliteTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    /** Tipo de la taxonomia (ver EVENT_TYPES en src/lib/intel/types.ts). */
+    type: text("type").notNull(),
+    primaryAssetId: text("primary_asset_id").references(() => assets.id, {
+      onDelete: "set null",
+    }),
+    /** JSON array de symbols afectados. */
+    companies: text("companies").notNull().default("[]"),
+    headline: text("headline").notNull(),
+    /** HECHO: lo que reportan las fuentes, sin interpretar. */
+    fact: text("fact").notNull(),
+    /** INFERENCIA: implicaciones probables, marcadas como tales. */
+    inference: text("inference").notNull().default(""),
+    /** EVALUACION IA: efecto sobre la tesis de inversion. */
+    assessment: text("assessment").notNull().default(""),
+    /** 0..100 */
+    materiality: integer("materiality").notNull(),
+    /** 0..100 */
+    confidence: integer("confidence").notNull(),
+    /** -100..100: cuanto cambia la tesis (no es sentimiento). */
+    thesisImpact: integer("thesis_impact").notNull(),
+    /** immediate | short | medium | long */
+    timeHorizon: text("time_horizon").notNull(),
+    /** 0..100, segun peso en cartera / watchlist. */
+    portfolioRelevance: integer("portfolio_relevance").notNull(),
+    /** 1 (evidencia primaria) .. 4 (fuente debil). Mejor tier entre fuentes. */
+    sourceTier: integer("source_tier").notNull(),
+    /** 0..100, ranking final. */
+    signalScore: real("signal_score").notNull(),
+    /** P1 (critico) .. P5 (ruido, no notificar). */
+    priority: text("priority").notNull(),
+    /** Fecha del evento (la noticia mas antigua del cluster). */
+    occurredAt: integer("occurred_at").notNull(),
+    /** Clave de deduplicacion del cluster de noticias. */
+    clusterKey: text("cluster_key").notNull(),
+    /** Auditoria: modelo y version del prompt que lo produjo. */
+    model: text("model"),
+    promptVersion: text("prompt_version"),
+    /** useful | not_useful | known | speculative | late | irrelevant */
+    feedback: text("feedback"),
+    feedbackAt: integer("feedback_at"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("events_cluster_idx").on(t.clusterKey),
+    index("events_priority_idx").on(t.priority, t.signalScore),
+    index("events_asset_idx").on(t.primaryAssetId),
+    index("events_occurred_idx").on(t.occurredAt),
+  ],
+);
+
+/** Evidencia: que noticias respaldan cada evento. */
+export const eventSources = sqliteTable(
+  "event_sources",
+  {
+    eventId: text("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    newsId: text("news_id")
+      .notNull()
+      .references(() => news.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.newsId] })],
+);
+
 export type Asset = typeof assets.$inferSelect;
 export type Account = typeof accounts.$inferSelect;
+export type EventRow = typeof events.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type PriceRow = typeof priceCache.$inferSelect;
 export type Snapshot = typeof snapshots.$inferSelect;

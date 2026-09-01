@@ -388,13 +388,6 @@ export function parseFlexStatement(xml: string): FlexStatement {
   const baseCurrency =
     attr(child(statement, "AccountInformation"), "currency").toUpperCase() ||
     "USD";
-  // Diagnostico temporal: aparece en los logs de Vercel para ver que trae IBKR.
-  console.log(
-    "[flex-cash] filas=%d divisas=%s",
-    cashRows.length,
-    cashRows.map((r) => attr(r, "currency")).join(",") || "(ninguna)",
-  );
-
   const perCurrency = cashRows.filter(
     (cr) => attr(cr, "currency").toUpperCase() !== "BASE_SUMMARY",
   );

@@ -100,9 +100,15 @@ export async function processNews(limit = 30): Promise<number> {
           .where(inArray(news.id, [row.id]));
         processed++;
       }
-    } catch {
+    } catch (e) {
       // Si el modelo falla marcamos el lote como visto para no reintentar
       // en bucle en cada cron. El titular sigue siendo util sin resumen.
+      // El motivo tiene que quedar en los logs: un modelo mal configurado
+      // se ve aqui, no en un 200 vacio.
+      console.error(
+        "[news] resumen fallo:",
+        e instanceof Error ? e.message : String(e),
+      );
       for (const row of batch) {
         await db
           .update(news)

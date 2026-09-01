@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import {
+  Bell,
   Bot,
   Briefcase,
   LayoutDashboard,
@@ -21,6 +22,7 @@ const LINKS = [
   { href: "/invest", label: "Resumen", icon: LayoutDashboard },
   { href: "/invest/cartera", label: "Cartera", icon: Briefcase },
   { href: "/invest/watchlist", label: "Watchlist", icon: Star },
+  { href: "/invest/alertas", label: "Alertas", icon: Bell },
   { href: "/invest/noticias", label: "Noticias", icon: Newspaper },
   { href: "/invest/analisis", label: "Analisis IA", icon: Bot },
   { href: "/invest/cuentas", label: "Cuentas", icon: Plug },

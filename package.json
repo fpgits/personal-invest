@@ -14,7 +14,9 @@
     "hash-password": "tsx scripts/hash-password.ts",
     "test:pnl": "tsx scripts/test-pnl.ts",
     "test:ibkr": "tsx scripts/test-ibkr.ts",
-    "test": "npm run test:pnl && npm run test:ibkr"
+    "test:intel": "tsx scripts/test-intel.ts",
+    "test:intel:db": "tsx scripts/test-intel-db.ts",
+    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:intel:db"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

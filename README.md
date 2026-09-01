@@ -154,9 +154,11 @@ El motor tiene tests con cifras calculadas a mano, y el parser de IBKR tiene
 los suyos con XML de ejemplo con la forma real que devuelve Flex:
 
 ```bash
-npm run test        # los dos
+npm run test           # todos
 npm run test:pnl
 npm run test:ibkr
+npm run test:intel     # motor de inteligencia, etapas puras
+npm run test:intel:db  # motor de inteligencia contra SQLite local
 ```
 
 ## Deploy
@@ -174,6 +176,7 @@ Definidos en `vercel.json`. Necesitan `CRON_SECRET` o devuelven 401.
 | `/api/cron/sync` | cada 6 h | Sincroniza los exchanges conectados |
 | `/api/cron/snapshot` | 22:05 diario | Guarda la foto del dia. **Sin esto no hay grafico historico** |
 | `/api/cron/news` | cada 4 h | Trae titulares y los resume con el modelo rapido |
+| `/api/cron/events` | cada 4 h, a y media | Convierte noticias en eventos con score y prioridad (ver `docs/INTEL-ARCHITECTURE.md`) |
 
 Estos horarios (cada 15 min, cada 4h, cada 6h) requieren el plan Pro de
 Vercel. En Hobby, cualquier cron mas frecuente que diario hace fallar el
@@ -216,7 +219,7 @@ npm run dev            # desarrollo
 npm run build          # build de produccion
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint
-npm run test:pnl       # tests del motor de P&L
+npm run test           # todos los tests (P&L, IBKR, inteligencia)
 npm run db:generate    # genera migracion SQL desde el schema
 npm run db:push        # aplica el schema a Turso
 npm run db:studio      # explorador de la base de datos
@@ -229,11 +232,11 @@ npm run hash-password  # genera AUTH_PASSWORD_HASH y los demas secretos
 src/
   app/
     (app)/        paginas con sesion: resumen, cartera, watchlist,
-                  noticias, analisis, cuentas, ajustes
+                  alertas, noticias, analisis, cuentas, ajustes
     api/          route handlers, incluidos los cron
     login/
   components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
-  db/             schema.ts (12 tablas) y cliente perezoso de libsql
+  db/             schema.ts (15 tablas) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
     market/       finnhub.ts, coingecko.ts y el router entre ambos
@@ -241,8 +244,8 @@ src/
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
     brokers/      ibkr.ts (Flex Web Service) y sync.ts (bolsa)
     ai/           client.ts, context.ts, prompts.ts
+    intel/        motor de inteligencia: sources, dedup, extract, score, run
     crypto.ts     AES-256-GCM para las API keys, scrypt para la contrasena
-    csv.ts        parser tolerante de CSV de brokers
   proxy.ts        guarda de sesion (antes middleware.ts)
 ```
 
