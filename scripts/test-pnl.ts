@@ -171,11 +171,17 @@ async function run() {
 
   console.log("\n7. Transferencia entrante con coste desconocido");
   {
-    // Deposito de 1 BTC sin precio: coste 0, todo el valor es P&L latente
+    // Deposito de 1 BTC sin precio: el coste se estima al precio actual, asi
+    // el P&L es ~0 (no fingimos que todo el valor es ganancia) y se marca.
     const rows = [tx(BTC, "transfer_in", 1, 0, 0, 1)];
     const p = await buildSummary(rows, "average", "USD", quotesFor({ [BTC.id]: 60000 }));
-    near(p.positions[0].costBasis, 0, "coste desconocido queda en 0");
-    near(p.positions[0].unrealizedPnl, 60000, "P&L latente completo");
+    near(p.positions[0].costBasis, 60000, "coste estimado al precio actual");
+    near(p.positions[0].unrealizedPnl, 0, "P&L neutro para coste desconocido");
+    checks++;
+    if (!p.positions[0].costEstimated) {
+      failures++;
+      console.error("  FALLO: la posicion deberia marcarse costEstimated");
+    } else console.log("  ok  posicion marcada como coste estimado");
   }
 
   console.log("\n8. Pesos y reparto por clase");
@@ -205,6 +211,27 @@ async function run() {
     const p = await buildSummary(rows, "average", "USD", quotesFor({}));
     near(p.closed[0]?.realizedPnl ?? 0, 100, "solo realiza las 5 que tenia");
     near(p.totalValue, 0, "sin cantidad negativa");
+  }
+
+  console.log("\n10. Posicion mixta: compra con coste + deposito sin coste");
+  {
+    // 1 BTC comprado @ 100 (coste real) + 1 BTC depositado sin precio.
+    // Precio actual 200 -> valor 400. Coste = 100 real + 200 estimado = 300.
+    // P&L = 400 - 300 = 100: solo gana la parte cuyo coste conocemos.
+    const rows = [
+      tx(BTC, "buy", 1, 100, 0, 1),
+      tx(BTC, "transfer_in", 1, 0, 0, 2),
+    ];
+    const p = await buildSummary(rows, "average", "USD", quotesFor({ [BTC.id]: 200 }));
+    const pos = p.positions[0];
+    near(pos.quantity, 2, "cantidad total (conocida + deposito)");
+    near(pos.costBasis, 300, "coste real + estimado");
+    near(pos.unrealizedPnl, 100, "P&L solo de la parte conocida");
+    checks++;
+    if (!pos.costEstimated) {
+      failures++;
+      console.error("  FALLO: la posicion mixta deberia marcarse costEstimated");
+    } else console.log("  ok  posicion mixta marcada como coste estimado");
   }
 
   console.log(

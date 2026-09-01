@@ -99,6 +99,9 @@ export default async function CarteraPage() {
                             {p.priceStale && (
                               <Badge tone="warn">precio viejo</Badge>
                             )}
+                            {p.costEstimated && (
+                              <Badge tone="neutral">coste estimado</Badge>
+                            )}
                           </div>
                           <p className="truncate text-xs text-faint">
                             {p.asset.name}

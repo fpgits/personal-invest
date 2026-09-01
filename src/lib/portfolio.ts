@@ -23,6 +23,12 @@ export type Position = {
   weight: number;
   priceStale: boolean;
   priceUpdatedAt: number | null;
+  /**
+   * true si parte de la cantidad entro como transferencia sin precio (deposito
+   * de origen desconocido). Su coste se estima al precio actual, asi que el P&L
+   * de esa parte es ~0 y el usuario deberia fijar el coste real si lo sabe.
+   */
+  costEstimated: boolean;
 };
 
 export type ClassBreakdown = {
@@ -59,10 +65,20 @@ type Acc = {
   dividends: number;
   fees: number;
   lots: Lot[];
+  /** Cantidad recibida sin precio (deposito): coste desconocido, aparte. */
+  unknownQty: number;
 };
 
 function emptyAcc(): Acc {
-  return { quantity: 0, costBasis: 0, realized: 0, dividends: 0, fees: 0, lots: [] };
+  return {
+    quantity: 0,
+    costBasis: 0,
+    realized: 0,
+    dividends: 0,
+    fees: 0,
+    lots: [],
+    unknownQty: 0,
+  };
 }
 
 const EPS = 1e-9;
@@ -81,8 +97,13 @@ function apply(acc: Acc, tx: Transaction, method: "average" | "fifo") {
   switch (tx.type) {
     case "buy":
     case "transfer_in": {
-      // Una transferencia entrante sin precio entra con coste 0: no inventamos
-      // un coste que no conocemos, y queda visible como P&L al venderla.
+      // transfer_in sin precio = coste DESCONOCIDO. No lo metemos como coste 0
+      // (eso haria que todo su valor pareciera ganancia): lo apartamos en
+      // unknownQty y al valorar se estima al precio actual -> P&L neutro + aviso.
+      if (tx.type === "transfer_in" && tx.price <= 0) {
+        acc.unknownQty += qty;
+        break;
+      }
       const cost = gross + tx.fee;
       acc.quantity += qty;
       acc.costBasis += cost;
@@ -187,9 +208,10 @@ export async function buildSummary(
     apply(accs.get(asset.id)!, tx, method);
   }
 
-  const held = [...assetById.values()].filter(
-    (a) => (accs.get(a.id)?.quantity ?? 0) > EPS,
-  );
+  const held = [...assetById.values()].filter((a) => {
+    const acc = accs.get(a.id);
+    return ((acc?.quantity ?? 0) + (acc?.unknownQty ?? 0)) > EPS;
+  });
   const quotes = await quoteProvider(held);
 
   const open: Position[] = [];
@@ -200,30 +222,42 @@ export async function buildSummary(
     const asset = assetById.get(assetId)!;
     const q = quotes[assetId];
     const price = q?.price ?? 0;
-    const value = acc.quantity * price;
-    const avgCost = acc.quantity > EPS ? acc.costBasis / acc.quantity : 0;
-    const unrealized = acc.quantity > EPS ? value - acc.costBasis : 0;
+
+    // Cantidad total = lo de coste conocido + los depositos sin precio.
+    const quantity = acc.quantity + acc.unknownQty;
+    const value = quantity * price;
+
+    // La parte de coste desconocido se estima al precio actual: asi su P&L es
+    // ~0 en vez de fingir que todo su valor es ganancia. El resto conserva su
+    // coste real, asi que el P&L refleja solo la parte que si sabemos.
+    const estimatedCost = acc.unknownQty * price;
+    const costBasis = acc.costBasis + estimatedCost;
+    const costEstimated = acc.unknownQty > EPS;
+
+    const avgCost = quantity > EPS ? costBasis / quantity : 0;
+    const unrealized = quantity > EPS ? value - costBasis : 0;
 
     const pos: Position = {
       asset,
-      quantity: acc.quantity,
+      quantity,
       avgCost,
-      costBasis: acc.costBasis,
+      costBasis,
       price,
       value,
       unrealizedPnl: unrealized,
-      unrealizedPct: acc.costBasis > EPS ? (unrealized / acc.costBasis) * 100 : 0,
+      unrealizedPct: costBasis > EPS ? (unrealized / costBasis) * 100 : 0,
       realizedPnl: acc.realized,
       dividends: acc.dividends,
       fees: acc.fees,
-      dayChange: acc.quantity * (q?.change ?? 0),
+      dayChange: quantity * (q?.change ?? 0),
       dayChangePct: q?.changePct ?? 0,
       weight: 0,
       priceStale: q?.stale ?? true,
       priceUpdatedAt: q?.updatedAt ?? null,
+      costEstimated,
     };
 
-    if (acc.quantity > EPS) {
+    if (quantity > EPS) {
       totalValue += value;
       open.push(pos);
     } else if (
