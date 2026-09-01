@@ -177,6 +177,24 @@ console.log("\n4b. Saldo en efectivo del Cash Report (BASE_SUMMARY excluido)");
   eq(parseFlexStatement(SINGLE).cashBalances.length, 0, "sin Cash Report -> vacio");
 }
 
+console.log("\n4c. Cash Report solo con BASE_SUMMARY (sin currency breakout)");
+{
+  const XML = `<FlexQueryResponse>
+  <FlexStatements count="1">
+    <FlexStatement accountId="U1" fromDate="20260101" toDate="20260901">
+      <AccountInformation currency="USD" />
+      <CashReport>
+        <CashReportCurrency currency="BASE_SUMMARY" endingCash="1500.25" />
+      </CashReport>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>`;
+  const st = parseFlexStatement(XML);
+  eq(st.cashBalances.length, 1, "una fila (BASE_SUMMARY usado como total)");
+  eq(st.cashBalances[0].currency, "USD", "etiquetado con la divisa base");
+  eq(st.cashBalances[0].amount, 1500.25, "importe del BASE_SUMMARY");
+}
+
 console.log("\n5. Posiciones abiertas para reconciliar");
 {
   const st = parseFlexStatement(MULTI);

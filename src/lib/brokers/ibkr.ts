@@ -381,11 +381,29 @@ export function parseFlexStatement(xml: string): FlexStatement {
 
   /* ---------- Saldo en efectivo (Cash Report) ---------- */
   // Solo aparece si la Flex Query tiene activada la seccion "Cash Report".
-  // La fila BASE_SUMMARY es el total en divisa base: se salta para no duplicar.
+  // Con "currency breakout" IBKR emite una fila por divisa (mas BASE_SUMMARY,
+  // el total en divisa base). SIN breakout emite solo BASE_SUMMARY: en ese caso
+  // la usamos como el saldo total en la divisa base, en vez de descartarla.
+  const cashRows = asArray(child(statement, "CashReport").CashReportCurrency);
+  const baseCurrency =
+    attr(child(statement, "AccountInformation"), "currency").toUpperCase() ||
+    "USD";
+  // Diagnostico temporal: aparece en los logs de Vercel para ver que trae IBKR.
+  console.log(
+    "[flex-cash] filas=%d divisas=%s",
+    cashRows.length,
+    cashRows.map((r) => attr(r, "currency")).join(",") || "(ninguna)",
+  );
+
+  const perCurrency = cashRows.filter(
+    (cr) => attr(cr, "currency").toUpperCase() !== "BASE_SUMMARY",
+  );
+  const chosen = perCurrency.length > 0 ? perCurrency : cashRows;
+
   const cashBalances: FlexCashBalance[] = [];
-  for (const cr of asArray(child(statement, "CashReport").CashReportCurrency)) {
-    const currency = attr(cr, "currency").toUpperCase();
-    if (!currency || currency === "BASE_SUMMARY") continue;
+  for (const cr of chosen) {
+    const raw = attr(cr, "currency").toUpperCase();
+    const currency = !raw || raw === "BASE_SUMMARY" ? baseCurrency : raw;
     const amount = num(cr.endingCash ?? cr.endingSettledCash);
     cashBalances.push({ currency, amount });
   }
