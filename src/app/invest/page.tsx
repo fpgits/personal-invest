@@ -35,24 +35,16 @@ export default async function DashboardPage() {
         <EmptyState
           title="Todavia no hay nada aqui"
           action={
-            <div className="flex flex-wrap justify-center gap-2">
-              <Link
-                href="/invest/cuentas"
-                className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90"
-              >
-                Conectar un exchange
-              </Link>
-              <Link
-                href="/invest/cartera"
-                className="rounded-lg border border-border px-3.5 py-2 text-sm transition hover:border-border-strong"
-              >
-                Anadir operacion a mano
-              </Link>
-            </div>
+            <Link
+              href="/invest/cuentas"
+              className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90"
+            >
+              Conectar una cuenta
+            </Link>
           }
         >
-          Conecta un exchange con claves de solo lectura para que se sincronice
-          solo, importa un CSV de tu broker, o mete las operaciones a mano.
+          Conecta IBKR o Binance con claves de solo lectura y la cartera se
+          sincroniza sola. Es solo lectura: no se opera desde aqui.
         </EmptyState>
       </>
     );

@@ -1,6 +1,5 @@
 import { desc, eq } from "drizzle-orm";
 import { classColor } from "@/lib/colors";
-import { TransactionForm } from "@/components/transaction-form";
 import {
   AssetIcon,
   Badge,
@@ -169,15 +168,14 @@ export default async function CarteraPage() {
         subtitle={`${portfolio.positions.length} posiciones abiertas · coste medio ${
           portfolio.currency
         }`}
-        action={<TransactionForm />}
       >
         Cartera
       </PageTitle>
 
       {portfolio.positions.length === 0 ? (
         <EmptyState title="No hay posiciones abiertas">
-          Anade una operacion, importa un CSV o conecta un exchange en la
-          pestana de Cuentas.
+          Conecta IBKR o Binance con claves de solo lectura en la pestana de
+          Cuentas y sincroniza. La cartera se llena sola.
         </EmptyState>
       ) : (
         <>
