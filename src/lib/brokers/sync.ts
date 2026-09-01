@@ -1,11 +1,14 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, like, notLike } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, transactions, type Account } from "@/db/schema";
 import { makeAssetResolver } from "@/lib/assets";
 import { decrypt } from "@/lib/crypto";
+import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
 import { chunk, id } from "@/lib/utils";
 import { fetchStatement, isDividend, mapAssetClass } from "./ibkr";
+
+const RECONCILE_PREFIX = "ibkr-reconcile:";
 
 export type BrokerSyncResult = {
   accountId: string;
@@ -127,52 +130,75 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
     }
 
     /* ---------- Reconciliacion contra Open Positions ---------- */
-    // Una sola query agregada por cuenta, en vez de una por posicion.
-    const knownRows = await db
+    // Se recalcula desde cero cada sync: borra ajustes anteriores.
+    await db
+      .delete(transactions)
+      .where(
+        and(
+          eq(transactions.accountId, account.id),
+          like(transactions.externalId, `${RECONCILE_PREFIX}%`),
+        ),
+      );
+
+    // Trades reales (sin ajustes) para el replay con tope-en-0, igual que el
+    // motor de P&L. Los dividendos no cuentan para la cantidad.
+    const realTx = await db
       .select({
         assetId: transactions.assetId,
-        net: sql<number>`
-          coalesce(sum(
-            case
-              when ${transactions.type} in ('buy','transfer_in') then ${transactions.quantity}
-              when ${transactions.type} in ('sell','transfer_out') then -${transactions.quantity}
-              else 0
-            end
-          ), 0)
-        `,
+        type: transactions.type,
+        quantity: transactions.quantity,
+        executedAt: transactions.executedAt,
       })
       .from(transactions)
-      .where(eq(transactions.accountId, account.id))
-      .groupBy(transactions.assetId);
+      .where(
+        and(
+          eq(transactions.accountId, account.id),
+          notLike(transactions.externalId, `${RECONCILE_PREFIX}%`),
+        ),
+      );
 
-    const known = new Map(knownRows.map((r) => [r.assetId, Number(r.net)]));
+    const realByAsset = new Map<string, HeldTx[]>();
+    for (const r of realTx) {
+      const list = realByAsset.get(r.assetId) ?? [];
+      list.push({
+        type: r.type as HeldTx["type"],
+        quantity: r.quantity,
+        executedAt: r.executedAt,
+      });
+      realByAsset.set(r.assetId, list);
+    }
 
-    const adjustments: (typeof transactions.$inferInsert)[] = [];
+    // Open Positions de IBKR = la verdad. Guardamos tambien el coste real de
+    // cada posicion para que el ajuste de entrada no sea "coste desconocido".
+    const targetQty = new Map<string, number>();
+    const costByAsset = new Map<string, { price: number; currency: string }>();
     for (const p of statement.positions) {
       const assetClass = mapAssetClass(p.assetCategory);
       if (!assetClass) continue;
-
       const asset = await resolveAsset(p.symbol, assetClass);
-      const diff = p.quantity - (known.get(asset.id) ?? 0);
-      if (Math.abs(diff) < 1e-6) continue;
+      targetQty.set(asset.id, p.quantity);
+      costByAsset.set(asset.id, { price: p.costBasisPrice, currency: p.currency });
+    }
 
-      // A diferencia de un exchange, IBKR si nos da el coste medio, asi que
-      // el ajuste entra con su coste real en vez de con coste desconocido.
-      adjustments.push({
+    const plugs = buildReconciliation(realByAsset, targetQty);
+    const adjustments: (typeof transactions.$inferInsert)[] = plugs.map((pl) => {
+      const cost = costByAsset.get(pl.assetId);
+      return {
         id: id(),
         accountId: account.id,
-        assetId: asset.id,
-        type: diff > 0 ? "transfer_in" : "transfer_out",
-        quantity: Math.abs(diff),
-        price: diff > 0 ? p.costBasisPrice : 0,
+        assetId: pl.assetId,
+        type: pl.direction,
+        quantity: pl.quantity,
+        // IBKR si nos da el coste medio: la entrada usa su coste real.
+        price: pl.direction === "transfer_in" ? (cost?.price ?? 0) : 0,
         fee: 0,
-        currency: p.currency,
+        currency: cost?.currency ?? "USD",
         executedAt: Date.now(),
-        externalId: `ibkr-reconcile:${asset.id}:${Date.now()}`,
+        externalId: `${RECONCILE_PREFIX}${pl.assetId}`,
         source: "sync",
-        note: "Ajuste contra Open Positions de IBKR. Pasa cuando la Flex Query no cubre todo el historico de operaciones.",
-      });
-    }
+        note: "Ajuste contra Open Positions de IBKR. Pasa cuando la Flex Query no cubre todo el historico.",
+      };
+    });
 
     for (const part of chunk(adjustments, INSERT_CHUNK)) {
       await db.insert(transactions).values(part).onConflictDoNothing();

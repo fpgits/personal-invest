@@ -9,6 +9,7 @@ process.env.ENCRYPTION_KEY ||= Buffer.alloc(32).toString("base64");
 process.env.OPENROUTER_API_KEY ||= "test";
 
 import { buildSummary } from "../src/lib/portfolio";
+import { buildReconciliation, netHeldQuantity } from "../src/lib/holdings";
 import type { Asset, Transaction } from "../src/db/schema";
 
 let failures = 0;
@@ -232,6 +233,74 @@ async function run() {
       failures++;
       console.error("  FALLO: la posicion mixta deberia marcarse costEstimated");
     } else console.log("  ok  posicion mixta marcada como coste estimado");
+  }
+
+  console.log("\n11. netHeldQuantity: las ventas no bajan de 0");
+  {
+    // Compra 1, vende 3 (2 venian de un deposito que el historial no ve):
+    // el replay con tope da 0, no -2.
+    near(
+      netHeldQuantity([
+        { type: "buy", quantity: 1, executedAt: 1 },
+        { type: "sell", quantity: 3, executedAt: 2 },
+      ]),
+      0,
+      "no baja de 0",
+    );
+  }
+
+  console.log("\n12. El ajuste cuadra la cantidad con el balance real");
+  {
+    // Historial neto (con tope) = 0; balance real 0.5 -> ajuste +0.5 y el
+    // motor debe mostrar 0.5.
+    const real: Parameters<typeof netHeldQuantity>[0] = [
+      { type: "buy", quantity: 1, executedAt: 1 },
+      { type: "sell", quantity: 3, executedAt: 2 },
+    ];
+    const plugs = buildReconciliation(
+      new Map([[BTC.id, real]]),
+      new Map([[BTC.id, 0.5]]),
+    );
+    checks++;
+    if (
+      plugs.length !== 1 ||
+      plugs[0].direction !== "transfer_in" ||
+      Math.abs(plugs[0].quantity - 0.5) > 1e-9
+    ) {
+      failures++;
+      console.error(`  FALLO ajuste: ${JSON.stringify(plugs)}`);
+    } else console.log("  ok  ajuste = +0.5 transfer_in");
+
+    const rows = [
+      tx(BTC, "buy", 1, 100, 0, 1),
+      tx(BTC, "sell", 3, 120, 0, 2),
+      tx(BTC, "transfer_in", 0.5, 0, 0, 3),
+    ];
+    const p = await buildSummary(rows, "average", "USD", quotesFor({ [BTC.id]: 200 }));
+    near(p.positions[0]?.quantity ?? -1, 0.5, "el motor muestra el balance real");
+  }
+
+  console.log("\n13. Patron ETH: neto pequeno + balance menor -> ajuste de salida");
+  {
+    // Reproduce el bug real: el neto con tope da 0.02 y el balance real es dust.
+    // El ajuste debe ser una SALIDA hacia el balance real, no una entrada gigante.
+    const real: Parameters<typeof netHeldQuantity>[0] = [
+      { type: "buy", quantity: 5, executedAt: 1 },
+      { type: "sell", quantity: 4.98, executedAt: 2 },
+    ];
+    const plugs = buildReconciliation(
+      new Map([[BTC.id, real]]),
+      new Map([[BTC.id, 0.00006886]]),
+    );
+    checks++;
+    const ok =
+      plugs.length === 1 &&
+      plugs[0].direction === "transfer_out" &&
+      Math.abs(plugs[0].quantity - (0.02 - 0.00006886)) < 1e-6;
+    if (!ok) {
+      failures++;
+      console.error(`  FALLO ETH: ${JSON.stringify(plugs)}`);
+    } else console.log("  ok  ajuste es salida hacia el balance real (dust)");
   }
 
   console.log(

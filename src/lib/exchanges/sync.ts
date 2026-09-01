@@ -1,10 +1,13 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, like, notLike } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, transactions, type Account } from "@/db/schema";
 import { makeAssetResolver } from "@/lib/assets";
+import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
 import { chunk, id } from "@/lib/utils";
 import { cleanError, clientFor, fetchBalances, fetchTrades, isFiat } from "./ccxt";
+
+const RECONCILE_PREFIX = "reconcile-";
 
 export type SyncResult = {
   accountId: string;
@@ -84,49 +87,72 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
     }
 
     /* ---------- Reconciliacion: lo que dice el exchange manda ---------- */
-    // Una sola query agregada por cuenta, en vez de una por moneda.
-    const knownRows = await db
+    // Se recalcula desde cero cada sync: borra los ajustes anteriores para no
+    // arrastrar un plug viejo que ya no cuadra.
+    await db
+      .delete(transactions)
+      .where(
+        and(
+          eq(transactions.accountId, account.id),
+          like(transactions.externalId, `${RECONCILE_PREFIX}%`),
+        ),
+      );
+
+    // Trades REALES (sin ajustes), para replicarlos con el mismo tope-en-0 que
+    // usa el motor de P&L. Calcular el ajuste con una suma sin tope era el bug
+    // que inflaba las cantidades.
+    const realTx = await db
       .select({
         assetId: transactions.assetId,
-        net: sql<number>`
-          coalesce(sum(
-            case
-              when ${transactions.type} in ('buy','transfer_in') then ${transactions.quantity}
-              when ${transactions.type} in ('sell','transfer_out') then -${transactions.quantity}
-              else 0
-            end
-          ), 0)
-        `,
+        type: transactions.type,
+        quantity: transactions.quantity,
+        executedAt: transactions.executedAt,
       })
       .from(transactions)
-      .where(eq(transactions.accountId, account.id))
-      .groupBy(transactions.assetId);
+      .where(
+        and(
+          eq(transactions.accountId, account.id),
+          notLike(transactions.externalId, `${RECONCILE_PREFIX}%`),
+        ),
+      );
 
-    const known = new Map(knownRows.map((r) => [r.assetId, Number(r.net)]));
-
-    const adjustments: (typeof transactions.$inferInsert)[] = [];
-    for (const b of balances) {
-      const asset = await resolveAsset(b.currency, "crypto");
-      const diff = b.amount - (known.get(asset.id) ?? 0);
-      if (Math.abs(diff) < 1e-8) continue;
-
-      adjustments.push({
-        id: id(),
-        accountId: account.id,
-        assetId: asset.id,
-        type: diff > 0 ? "transfer_in" : "transfer_out",
-        quantity: Math.abs(diff),
-        // Coste desconocido a proposito: el exchange no nos da el precio de
-        // entrada de un deposito. Editalo a mano si lo sabes.
-        price: 0,
-        fee: 0,
-        currency: "USD",
-        executedAt: Date.now(),
-        externalId: `reconcile-${asset.id}-${Date.now()}`,
-        source: "sync",
-        note: "Ajuste automatico contra el balance del exchange. Coste de entrada desconocido.",
+    const realByAsset = new Map<string, HeldTx[]>();
+    for (const r of realTx) {
+      const list = realByAsset.get(r.assetId) ?? [];
+      list.push({
+        type: r.type as HeldTx["type"],
+        quantity: r.quantity,
+        executedAt: r.executedAt,
       });
+      realByAsset.set(r.assetId, list);
     }
+
+    // Balance real del exchange = la verdad. USDT y demas estables no son
+    // posiciones, se saltan.
+    const targetQty = new Map<string, number>();
+    for (const b of balances) {
+      if (isFiat(b.currency)) continue;
+      const asset = await resolveAsset(b.currency, "crypto");
+      targetQty.set(asset.id, b.amount);
+    }
+
+    const plugs = buildReconciliation(realByAsset, targetQty);
+    const adjustments: (typeof transactions.$inferInsert)[] = plugs.map((pl) => ({
+      id: id(),
+      accountId: account.id,
+      assetId: pl.assetId,
+      type: pl.direction,
+      quantity: pl.quantity,
+      // Coste desconocido a proposito: el exchange no nos da el precio de
+      // entrada de un deposito. La posicion se marca "coste estimado".
+      price: 0,
+      fee: 0,
+      currency: "USD",
+      executedAt: Date.now(),
+      externalId: `${RECONCILE_PREFIX}${pl.assetId}`,
+      source: "sync",
+      note: "Ajuste contra el balance real del exchange. Coste de entrada desconocido.",
+    }));
 
     for (const part of chunk(adjustments, INSERT_CHUNK)) {
       await db.insert(transactions).values(part).onConflictDoNothing();
