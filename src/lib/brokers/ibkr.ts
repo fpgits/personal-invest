@@ -51,6 +51,9 @@ export type FlexCash = {
   description: string;
 };
 
+/** Saldo en efectivo por divisa (del Cash Report de la Flex Query). */
+export type FlexCashBalance = { currency: string; amount: number };
+
 export type FlexStatement = {
   accountId: string;
   fromDate: string | null;
@@ -58,6 +61,8 @@ export type FlexStatement = {
   trades: FlexTrade[];
   positions: FlexPosition[];
   cash: FlexCash[];
+  /** Saldo en efectivo actual por divisa. Vacio si la query no trae Cash Report. */
+  cashBalances: FlexCashBalance[];
   /** Filas que no sabemos mapear todavia (opciones, futuros, forex). */
   skipped: Array<{ symbol: string; assetCategory: string; reason: string }>;
 };
@@ -374,6 +379,17 @@ export function parseFlexStatement(xml: string): FlexStatement {
     });
   }
 
+  /* ---------- Saldo en efectivo (Cash Report) ---------- */
+  // Solo aparece si la Flex Query tiene activada la seccion "Cash Report".
+  // La fila BASE_SUMMARY es el total en divisa base: se salta para no duplicar.
+  const cashBalances: FlexCashBalance[] = [];
+  for (const cr of asArray(child(statement, "CashReport").CashReportCurrency)) {
+    const currency = attr(cr, "currency").toUpperCase();
+    if (!currency || currency === "BASE_SUMMARY") continue;
+    const amount = num(cr.endingCash ?? cr.endingSettledCash);
+    cashBalances.push({ currency, amount });
+  }
+
   return {
     accountId: attr(statement, "accountId"),
     fromDate: attr(statement, "fromDate") || null,
@@ -381,6 +397,7 @@ export function parseFlexStatement(xml: string): FlexStatement {
     trades,
     positions,
     cash,
+    cashBalances,
     skipped,
   };
 }

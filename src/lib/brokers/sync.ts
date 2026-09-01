@@ -172,6 +172,7 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
     // cada posicion para que el ajuste de entrada no sea "coste desconocido".
     const targetQty = new Map<string, number>();
     const costByAsset = new Map<string, { price: number; currency: string }>();
+    const cashAssetIds = new Set<string>();
     for (const p of statement.positions) {
       const assetClass = mapAssetClass(p.assetCategory);
       if (!assetClass) continue;
@@ -180,23 +181,35 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
       costByAsset.set(asset.id, { price: p.costBasisPrice, currency: p.currency });
     }
 
+    // Saldo en efectivo de la cuenta (USD, EUR...) como clase 'cash', 1:1.
+    // Solo hay datos si la Flex Query incluye la seccion "Cash Report".
+    for (const cb of statement.cashBalances) {
+      const asset = await resolveAsset(cb.currency, "cash");
+      targetQty.set(asset.id, cb.amount);
+      cashAssetIds.add(asset.id);
+    }
+
     const plugs = buildReconciliation(realByAsset, targetQty);
     const adjustments: (typeof transactions.$inferInsert)[] = plugs.map((pl) => {
       const cost = costByAsset.get(pl.assetId);
+      const cash = cashAssetIds.has(pl.assetId);
       return {
         id: id(),
         accountId: account.id,
         assetId: pl.assetId,
         type: pl.direction,
         quantity: pl.quantity,
-        // IBKR si nos da el coste medio: la entrada usa su coste real.
-        price: pl.direction === "transfer_in" ? (cost?.price ?? 0) : 0,
+        // Efectivo: 1:1. Posiciones: IBKR nos da el coste medio real.
+        price:
+          pl.direction !== "transfer_in" ? 0 : cash ? 1 : cost?.price ?? 0,
         fee: 0,
         currency: cost?.currency ?? "USD",
         executedAt: Date.now(),
         externalId: `${RECONCILE_PREFIX}${pl.assetId}`,
         source: "sync",
-        note: "Ajuste contra Open Positions de IBKR. Pasa cuando la Flex Query no cubre todo el historico.",
+        note: cash
+          ? "Saldo en efectivo de IBKR."
+          : "Ajuste contra Open Positions de IBKR. Pasa cuando la Flex Query no cubre todo el historico.",
       };
     });
 

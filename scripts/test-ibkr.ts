@@ -86,6 +86,11 @@ const MULTI = `<?xml version="1.0" encoding="UTF-8"?>
                          dateTime="20240314" transactionID="2002"
                          description="MSFT WITHHOLDING" />
       </CashTransactions>
+      <CashReport>
+        <CashReportCurrency accountId="U7654321" currency="BASE_SUMMARY" endingCash="1200.00" />
+        <CashReportCurrency accountId="U7654321" currency="USD" endingCash="1000.00" />
+        <CashReportCurrency accountId="U7654321" currency="EUR" endingCash="200.00" />
+      </CashReport>
     </FlexStatement>
   </FlexStatements>
 </FlexQueryResponse>`;
@@ -154,6 +159,22 @@ console.log("\n4. Dividendos si, retenciones no");
     !st.cash.filter(isDividend).some((c) => c.amount < 0),
     "ninguna retencion se cuela como dividendo",
   );
+}
+
+console.log("\n4b. Saldo en efectivo del Cash Report (BASE_SUMMARY excluido)");
+{
+  const st = parseFlexStatement(MULTI);
+  eq(st.cashBalances.length, 2, "dos divisas (sin BASE_SUMMARY)");
+  const usd = st.cashBalances.find((c) => c.currency === "USD")!;
+  eq(usd.amount, 1000, "efectivo en USD");
+  const eur = st.cashBalances.find((c) => c.currency === "EUR")!;
+  eq(eur.amount, 200, "efectivo en EUR");
+  check(
+    !st.cashBalances.some((c) => c.currency === "BASE_SUMMARY"),
+    "BASE_SUMMARY no se cuenta (evita duplicar)",
+  );
+  // Sin Cash Report en la query, cashBalances queda vacio.
+  eq(parseFlexStatement(SINGLE).cashBalances.length, 0, "sin Cash Report -> vacio");
 }
 
 console.log("\n5. Posiciones abiertas para reconciliar");
