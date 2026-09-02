@@ -279,7 +279,7 @@ function EventCard({
       <dl className="mt-3 space-y-2 text-sm">
         <Block label="Hecho">{ev.fact}</Block>
         {ev.inference && <Block label="Inferencia">{ev.inference}</Block>}
-        {ev.assessment && <Block label="Evaluacion IA">{ev.assessment}</Block>}
+        {ev.assessment && <Block label={ev.model ? "Evaluacion IA" : "Evaluacion"}>{ev.assessment}</Block>}
       </dl>
 
       {ev.sources.length > 0 && (

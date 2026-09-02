@@ -264,6 +264,80 @@ export const thesisChanges = sqliteTable(
   ],
 );
 
+/**
+ * Inversores que sigues por sus 13F (SEC): gestores con obligacion de
+ * publicar cartera cada trimestre. Sus cambios son IDEAS con firma y fecha,
+ * nunca ordenes.
+ */
+export const managers = sqliteTable(
+  "managers",
+  {
+    id: text("id").primaryKey(),
+    /** CIK de 10 digitos del gestor (filer). */
+    cik: text("cik").notNull(),
+    name: text("name").notNull(),
+    note: text("note"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    lastSyncAt: integer("last_sync_at"),
+    lastError: text("last_error"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [uniqueIndex("managers_cik_idx").on(t.cik)],
+);
+
+/** Un 13F-HR procesado: periodo, fecha de presentacion y totales. */
+export const managerFilings = sqliteTable(
+  "manager_filings",
+  {
+    id: text("id").primaryKey(),
+    managerId: text("manager_id")
+      .notNull()
+      .references(() => managers.id, { onDelete: "cascade" }),
+    accession: text("accession").notNull(),
+    /** Fin del trimestre reportado, YYYY-MM-DD. */
+    period: text("period").notNull(),
+    filedAt: integer("filed_at").notNull(),
+    totalValue: real("total_value").notNull(),
+    positions: integer("positions").notNull(),
+    url: text("url").notNull(),
+    /** JSON: cambios frente al 13F anterior (ver ManagerChange). */
+    changes: text("changes").notNull().default("[]"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("manager_filings_accession_idx").on(t.managerId, t.accession),
+    index("manager_filings_manager_idx").on(t.managerId, t.period),
+  ],
+);
+
+/** Posiciones agregadas por CUSIP de un 13F. */
+export const managerHoldings = sqliteTable(
+  "manager_holdings",
+  {
+    id: text("id").primaryKey(),
+    filingId: text("filing_id")
+      .notNull()
+      .references(() => managerFilings.id, { onDelete: "cascade" }),
+    cusip: text("cusip").notNull(),
+    issuer: text("issuer").notNull(),
+    ticker: text("ticker"),
+    shares: real("shares").notNull(),
+    /** USD */
+    value: real("value").notNull(),
+    /** % del total de la cartera del gestor. */
+    pct: real("pct").notNull(),
+  },
+  (t) => [uniqueIndex("manager_holdings_filing_cusip_idx").on(t.filingId, t.cusip)],
+);
+
+/** CUSIP → ticker (OpenFIGI), cacheado para no repetir consultas. */
+export const cusipMap = sqliteTable("cusip_map", {
+  cusip: text("cusip").primaryKey(),
+  ticker: text("ticker"),
+  name: text("name"),
+  updatedAt: integer("updated_at").notNull().default(now),
+});
+
 /** Fundamentales basicos por activo (Finnhub): ratios, resultados, proxima fecha. */
 export const fundamentals = sqliteTable("fundamentals", {
   assetId: text("asset_id")
@@ -419,3 +493,6 @@ export type Thesis = typeof theses.$inferSelect;
 export type ThesisAssumption = typeof thesisAssumptions.$inferSelect;
 export type ThesisChange = typeof thesisChanges.$inferSelect;
 export type Fundamentals = typeof fundamentals.$inferSelect;
+export type Manager = typeof managers.$inferSelect;
+export type ManagerFiling = typeof managerFilings.$inferSelect;
+export type ManagerHolding = typeof managerHoldings.$inferSelect;

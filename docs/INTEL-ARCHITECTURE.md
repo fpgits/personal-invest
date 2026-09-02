@@ -301,7 +301,105 @@ titulares, y una forma de saber si las alertas sirven.
 
 ---
 
-## 5. Siguiente iteracion recomendada
+## 5. Iteracion 3 (hecha): Inversores (13F) — ideas con firma y fecha
+
+Origen: la pregunta "¿tiene valor el copy trading?". Copiar ordenes de un
+desconocido (eToro y similares), no: el track record es corto, la seleccion
+es por supervivencia y el retraso de ejecucion se come el margen. Copiar
+*ideas* de gestores con obligacion legal de publicar, si: todo fondo con
+mas de $100M en acciones de EE. UU. presenta un 13F-HR cada trimestre. Es
+la unica fuente de "que hace un inversor serio" que es primaria, gratuita y
+verificable. Con dos salvedades que el modulo repite en cada texto: llega
+con hasta 45 dias de retraso y no incluye cortos ni el motivo.
+
+### Que hace (`src/lib/managers.ts`, `/api/managers*`, pagina Inversores)
+
+1. **Alta por CIK** (`addManager`): busca por nombre en el autocompletado de
+   EDGAR (`efts.sec.gov/LATEST/search-index`) o pega el CIK; se valida contra
+   `data.sec.gov/submissions/CIK##########.json` (nombre oficial y que tenga
+   13F-HR; una empresa operativa se rechaza con un mensaje claro). El alta
+   descarga ya los dos ultimos 13F para tener un diff desde el minuto uno.
+2. **Sync** (`syncManagers`): por gestor activo, lista los 13F-HR (los
+   13F-HR/A —enmiendas— y 13F-NT se ignoran), coge los que no estan guardados
+   (maximo `filingsPerSync = 2`, del mas viejo al mas nuevo), baja el
+   `index.json` de la carpeta del filing y el primer XML que sea una
+   `informationTable` (la caratula `primary_doc.xml` se descarta por
+   contenido, no por nombre). Parseo con `fast-xml-parser` sin prefijos de
+   namespace. Se agrega por CUSIP (un mismo filer puede repetir un valor en
+   varias filas), se excluyen opciones (`putCall`) y bonos (`PRN`), y el % es
+   sobre lo que queda.
+3. **Diff** (`diffHoldings`): entradas y salidas a partir del 0,5% de la
+   cartera; subidas y bajadas cuando la posicion pesa >= 1% y las acciones
+   varian >= 25%. Ordenado por tamano. Sin trimestre anterior, sin diff.
+4. **Tickers**: el 13F trae CUSIP, no ticker. Se resuelven con OpenFIGI
+   (`ID_CUSIP`, `exchCode US`, se prefiere `Common Stock`) solo para el top
+   10 y los cambios, con cache en `cusip_map`. Sin `OPENFIGI_API_KEY` son 10
+   por peticion y 25 req/min (el codigo espera 3 s entre lotes); con clave,
+   100 y 250. Si OpenFIGI falla, se muestra el emisor y la pasada sigue.
+5. **Eventos tier 1, sin IA** (`createEvents`): solo los cambios cuyo ticker
+   es un activo que ya sigues (cartera, watchlist o conocido) entran en
+   `events` con `type = ownership`, `sourceTier = 1`, `confidence = 95`,
+   `thesisImpact = 0` (una compra de otro no es un cambio de TU tesis: no
+   genera propuestas), `promptVersion = 13f-v1`, `model = null`. El titular y
+   el hecho son deterministas con las cifras del filing; la evaluacion es un
+   texto fijo que recuerda que es una senal, no una tesis. La materialidad
+   sale del peso en la cartera del gestor (entrada/salida: 40 + 5·%, tope
+   75; variacion: 30 + 4·%, tope 65); el score y la prioridad usan los mismos
+   pesos que el resto de eventos (`loadWeights`). Una fila de `news`
+   (`kind = filing`, fuente "SEC EDGAR", URL de la carpeta en EDGAR) sirve de
+   evidencia. `clusterKey = 13f|cik|accession|cusip`: re-sincronizar no
+   duplica.
+6. **Pagina Inversores**: por gestor, ultimo trimestre, valor total,
+   posiciones, error de la ultima pasada, cambios con etiqueta
+   Cartera/Watchlist/Conocido y boton "Watchlist" para seguir lo que no
+   sigues aun (entra como `equity`, tambien si es un ETF), top 10 desplegable,
+   pausar/reanudar/quitar y enlace al filing en EDGAR.
+
+### Tablas (migracion `0006_managers_13f.sql`)
+
+- `managers` (cik unico, nombre oficial, nota, enabled, lastSyncAt, lastError).
+- `manager_filings` (gestor + accession unico, period `YYYY-MM-DD`, filedAt,
+  totalValue, positions, url, `changes` JSON con el diff ya calculado).
+- `manager_holdings` (filing + cusip unico, issuer, ticker, shares, value, pct).
+- `cusip_map` (cusip → ticker/name, cache de OpenFIGI; null si no resolvio).
+
+### Cron y tiempo
+
+Va dentro de `/api/cron/fundamentals` (06:45 diario) despues de los
+fundamentales, con `deadline` a 250 s desde el inicio: si se acaba el tiempo,
+los gestores que faltan quedan marcados `skipped` y entran al dia siguiente
+(se ordena por `lastSyncAt`, nunca sincronizados primero). Un fallo en un
+gestor se guarda en `lastError` y no tumba la pasada. El boton "Buscar 13F
+nuevos" hace lo mismo a mano (`POST /api/managers/sync`, 240 s).
+
+### Limites, a proposito
+
+- `maxHoldings = 600`: un filer con mas posiciones es un fondo cuantitativo o
+  un indexado; su 13F no dice nada y se rechaza con error visible.
+- Solo acciones y ETF de EE. UU. (es lo que cubre el 13F). Sin cortos, sin
+  opciones, sin bonos, sin posiciones fuera de EE. UU.
+- Una enmienda (13F-HR/A) no se procesa: si un gestor corrige su 13F, no se
+  refleja hasta el trimestre siguiente.
+- La primera pasada de un gestor muy activo puede necesitar hasta 100
+  CUSIPs nuevos → ~30 s de OpenFIGI sin clave. Por eso el alta se hace en la
+  propia peticion (con spinner) y no en el cron.
+
+### Como se prueba
+
+`npm run test:managers` (110 comprobaciones, sin red): parseo con y sin
+namespace, agregacion (put, PRN, filas repetidas), submissions (13F-HR/A y
+8-K fuera, URL sin ceros ni guiones), diff con umbrales inyectables, textos
+y materialidad, OpenFIGI; e integracion contra SQLite local con EDGAR y
+OpenFIGI inyectados: alta (validaciones, idempotente), sync con dos filings
+→ 3 cambios → 2 eventos solo para activos seguidos (relevancia
+watchlist > conocido), evidencia enlazada, segunda pasada sin duplicados,
+vista con etiquetas y top, gestor pausado, deadline (`skipped` sin tocar la
+red), tope de posiciones, trimestre nuevo y borrado (los eventos se
+conservan).
+
+---
+
+## 6. Siguiente iteracion recomendada
 
 1. **Chequeo deterministico de supuestos**: tras cada refresco de
    fundamentales, comparar `target`/`comparator` con la metrica real y
@@ -309,3 +407,5 @@ titulares, y una forma de saber si las alertas sirven.
 2. **Notificacion** (Telegram) de P1/P2 y de propuestas pendientes.
 3. **Segunda fuente de titulares** con tickers (o RSS de IR) detras de una
    interfaz `NewsProvider`.
+4. **Consenso entre gestores**: cuando dos o mas gestores seguidos entran en
+   el mismo valor el mismo trimestre, subir la materialidad del evento.

@@ -19,6 +19,7 @@ export const EVENT_TYPES = [
   "customer",
   "competition",
   "crypto_protocol",
+  "ownership",
   "other",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -38,6 +39,7 @@ export const EVENT_TYPE_LABELS: Record<EventType, string> = {
   customer: "Clientes",
   competition: "Competencia",
   crypto_protocol: "Protocolo",
+  ownership: "Inversores",
   other: "Otro",
 };
 

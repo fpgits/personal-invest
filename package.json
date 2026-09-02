@@ -17,7 +17,8 @@
     "test:intel": "tsx scripts/test-intel.ts",
     "test:intel:db": "tsx scripts/test-intel-db.ts",
     "test:sources": "tsx scripts/test-sources.ts",
-    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:intel:db"
+    "test:managers": "tsx scripts/test-managers.ts",
+    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:intel:db"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

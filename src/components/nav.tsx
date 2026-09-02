@@ -14,6 +14,7 @@ import {
   Plug,
   Settings,
   Star,
+  Users,
   X,
 } from "lucide-react";
 import { api, cn } from "@/lib/utils";
@@ -24,6 +25,7 @@ const LINKS = [
   { href: "/invest/watchlist", label: "Watchlist", icon: Star },
   { href: "/invest/alertas", label: "Alertas", icon: Bell },
   { href: "/invest/noticias", label: "Noticias", icon: Newspaper },
+  { href: "/invest/inversores", label: "Inversores", icon: Users },
   { href: "/invest/analisis", label: "Analisis IA", icon: Bot },
   { href: "/invest/cuentas", label: "Cuentas", icon: Plug },
   { href: "/invest/ajustes", label: "Ajustes", icon: Settings },

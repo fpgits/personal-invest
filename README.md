@@ -60,7 +60,8 @@ pantalla diciendo exactamente que falta.
 | `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
 | `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |
 | `FINNHUB_API_KEY` | no | finnhub.io/register. Sin esto no hay precios de acciones |
-| `SEC_CONTACT_EMAIL` | no | Tu email, para el User-Agent que exige la SEC. Sin esto no se leen filings de EDGAR |
+| `SEC_CONTACT_EMAIL` | no | Tu email, para el User-Agent que exige la SEC. Sin esto no se leen filings ni 13F de EDGAR |
+| `OPENFIGI_API_KEY` | no | openfigi.com/api. Opcional: sube el limite de CUSIP → ticker de 25 a 250 req/min (Inversores) |
 | `COINGECKO_API_KEY` | no | Opcional, sube el limite de 5-15 a 30 req/min |
 | `CRON_SECRET` | no | `openssl rand -hex 32`. Vercel lo manda como `Authorization: Bearer` |
 
@@ -179,7 +180,7 @@ Definidos en `vercel.json`. Necesitan `CRON_SECRET` o devuelven 401.
 | `/api/cron/snapshot` | 22:05 diario | Guarda la foto del dia. **Sin esto no hay grafico historico** |
 | `/api/cron/news` | cada 4 h | Titulares (Finnhub) + filings (SEC EDGAR), y resumen con el modelo rapido |
 | `/api/cron/events` | cada 4 h, a y media | Convierte noticias en eventos con score y prioridad, y propone cambios de tesis (ver `docs/INTEL-ARCHITECTURE.md`) |
-| `/api/cron/fundamentals` | 06:45 diario | Fundamentales basicos de las acciones (Finnhub) |
+| `/api/cron/fundamentals` | 06:45 diario | Fundamentales basicos de las acciones (Finnhub) y 13F nuevos de los gestores seguidos (SEC EDGAR) |
 
 Estos horarios (cada 15 min, cada 4h, cada 6h) requieren el plan Pro de
 Vercel. En Hobby, cualquier cron mas frecuente que diario hace fallar el
@@ -222,7 +223,7 @@ npm run dev            # desarrollo
 npm run build          # build de produccion
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint
-npm run test           # todos los tests (P&L, IBKR, inteligencia)
+npm run test           # todos los tests (P&L, IBKR, inteligencia, fuentes, inversores)
 npm run db:generate    # genera migracion SQL desde el schema
 npm run db:push        # aplica el schema a Turso
 npm run db:studio      # explorador de la base de datos
@@ -235,11 +236,11 @@ npm run hash-password  # genera AUTH_PASSWORD_HASH y los demas secretos
 src/
   app/
     (app)/        paginas con sesion: resumen, cartera, watchlist,
-                  alertas, noticias, analisis, cuentas, ajustes
+                  alertas, noticias, inversores, analisis, cuentas, ajustes
     api/          route handlers, incluidos los cron
     login/
   components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
-  db/             schema.ts (18 tablas) y cliente perezoso de libsql
+  db/             schema.ts (22 tablas) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
     market/       finnhub.ts, coingecko.ts y el router entre ambos
@@ -250,6 +251,7 @@ src/
     intel/        motor de inteligencia: sources, dedup, extract, score, run, calibration
     thesis.ts     tesis estructurada: supuestos, propuestas desde eventos, historial
     edgar.ts      SEC EDGAR: CIK, filings, texto de 8-K/10-Q
+    managers.ts   inversores seguidos: 13F de EDGAR, diff trimestral, eventos tier 1
     fundamentals.ts  ratios y resultados de Finnhub
     crypto.ts     AES-256-GCM para las API keys, scrypt para la contrasena
   proxy.ts        guarda de sesion (antes middleware.ts)

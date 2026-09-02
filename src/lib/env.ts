@@ -78,4 +78,8 @@ export const env = {
   get secContactEmail() {
     return opt("SEC_CONTACT_EMAIL");
   },
+  /** Opcional: sube el limite de OpenFIGI (CUSIP → ticker) de 25 a 250 req/min. */
+  get openfigiKey() {
+    return opt("OPENFIGI_API_KEY");
+  },
 };
