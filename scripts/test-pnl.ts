@@ -35,6 +35,7 @@ function asset(symbol: string, assetClass: "equity" | "crypto"): Asset {
     currency: "USD",
     providerId: symbol,
     logoUrl: null,
+    cik: null,
     createdAt: 0,
   };
 }
@@ -313,6 +314,7 @@ async function run() {
       currency: "USD",
       providerId: symbol,
       logoUrl: null,
+    cik: null,
       createdAt: 0,
     });
     const cashRow = (

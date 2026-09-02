@@ -14,6 +14,15 @@ export {
   type RunStats,
 } from "./run";
 export {
+  calibrationReport,
+  loadWeights,
+  saveWeights,
+  suggestWeights,
+  normalizeWeights,
+  type CalibrationReport,
+} from "./calibration";
+export { SIGNAL_WEIGHTS, type Weights } from "./score";
+export {
   EVENT_TYPE_LABELS,
   FEEDBACK_VALUES,
   HORIZON_LABELS,

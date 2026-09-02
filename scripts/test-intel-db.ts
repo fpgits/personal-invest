@@ -31,8 +31,9 @@ process.env.FINNHUB_API_KEY = "";
 import { createClient } from "@libsql/client";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db";
-import { assets, events, eventSources, news, settings } from "../src/db/schema";
-import type { ExtractResult } from "../src/lib/intel/extract";
+import { assets, events, eventSources, fundamentals, news, settings, thesisAssumptions, thesisChanges } from "../src/db/schema";
+import { buildExtractPrompt, type ExtractResult } from "../src/lib/intel/extract";
+import { getThesisView, proposeFromEvent, resolveProposal, saveThesis } from "../src/lib/thesis";
 import {
   LAST_RUN_KEY,
   lastRun,
@@ -53,6 +54,16 @@ function eq_<T>(actual: T, expected: T, label: string) {
     console.error(
       `  FALLO ${label}: esperado ${JSON.stringify(expected)}, obtenido ${JSON.stringify(actual)}`,
     );
+  } else {
+    console.log(`  ok  ${label}`);
+  }
+}
+
+function truthy_(v: unknown, label: string) {
+  checks++;
+  if (!v) {
+    failures++;
+    console.error(`  FALLO ${label}`);
   } else {
     console.log(`  ok  ${label}`);
   }
@@ -157,7 +168,7 @@ async function pendingIds(): Promise<string[]> {
 async function main() {
   console.log("\n1. Migraciones");
   const applied = await migrate();
-  eq_(applied >= 5, true, `${applied} ficheros de migracion aplicados`);
+  eq_(applied >= 6, true, `${applied} ficheros de migracion aplicados`);
 
   await db.insert(assets).values([
     { id: "a-aapl", symbol: "AAPL", name: "Apple", assetClass: "equity", currency: "USD", providerId: "AAPL", createdAt: now },
@@ -366,6 +377,138 @@ async function main() {
 
   const raw = await db.select().from(settings).where(eq(settings.key, LAST_RUN_KEY));
   eq_(raw.length, 1, "settings guarda la ultima pasada");
+
+  // -------------------------------------------------------------------------
+  console.log("\n12. Tesis: guardar, proponer desde un evento material, aceptar");
+  const thesisId = await saveThesis({
+    assetId: "a-aapl",
+    structure: {
+      summary: "Apple: hardware con servicios de alto margen.",
+      bull: ["Servicios crecen"],
+      bear: ["Dependencia del iPhone"],
+      assumptions: [
+        { metric: "Margen operativo", statement: "Se mantiene por encima del 28%", target: 28, comparator: "gte", unit: "%" },
+        { metric: "Crecimiento de servicios", statement: "Servicios crece >10%", target: 10, comparator: "gte", unit: "%" },
+      ],
+      breakers: ["Dos trimestres con margen < 25%"],
+      watch: ["Resultados"],
+    },
+    conviction: 4,
+    generatedBy: "test-model",
+    promptVersion: "thesis-test",
+  });
+  let view = (await getThesisView("a-aapl"))!;
+  eq_(view.assumptions.length, 2, "dos supuestos guardados");
+  eq_(view.assumptions[0].status, "unknown", "estado inicial sin evidencia");
+  eq_(view.history.length, 1, "historial con la creacion");
+  truthy_(view.thesis.thesis.includes("## Supuestos"), "markdown renderizado con supuestos");
+
+  // Re-guardar conservando estados por metric.
+  await db.update(thesisAssumptions).set({ status: "at_risk" }).where(eq(thesisAssumptions.id, view.assumptions[0].id));
+  await saveThesis({
+    assetId: "a-aapl",
+    structure: {
+      ...view.structure!,
+      assumptions: [
+        { metric: "margen operativo", statement: "Por encima del 27%", target: 27, comparator: "gte", unit: "%" },
+        { metric: "Nuevo supuesto", statement: "x", target: null, comparator: null, unit: null },
+      ],
+    },
+    generatedBy: "manual",
+  });
+  view = (await getThesisView("a-aapl"))!;
+  eq_(view.assumptions.map((a) => a.status), ["at_risk", "unknown"], "el estado se conserva al casar por metric (insensible a mayusculas)");
+  eq_(view.assumptions[0].id, view.assumptions[0].id, "id estable");
+  eq_(view.thesis.conviction, 4, "la conviccion se conserva si no se pasa");
+
+  // Un evento material con tesis → propuesta (IA falsa).
+  await db.insert(news).values([newsRow("Apple margin falls to 25% as costs rise", { id: "n-margin", source: "Reuters", url: "https://www.reuters.com/m" })]);
+  const ai12 = fakeAI({}, success({ headline: "Margen operativo cae al 25%", type: "earnings", thesis_impact: -70, materiality: 80, confidence: 90 }));
+  const proposed: string[] = [];
+  const s12 = await processEvents(
+    { trigger: "test" },
+    {
+      ...ai12.deps,
+      propose: async (eventId) => {
+        proposed.push(eventId);
+        return proposeFromEvent(eventId, {
+          check: async (prompt) => {
+            truthy_(prompt.includes("Margen operativo") && prompt.includes("id="), "el contraste recibe los supuestos con id");
+            return {
+              model: "fake-check",
+              object: {
+                material: true,
+                summary: "El margen cae por debajo del supuesto.",
+                assumption_updates: [{ id: view.assumptions[0].id, status: "broken", reason: "25% < 27%" }],
+                breaker_hit: false,
+                breaker: null,
+                conviction_delta: -1,
+              },
+            };
+          },
+        });
+      },
+    },
+  );
+  eq_(s12.created, 1, "evento creado");
+  eq_(proposed.length, 1, "el evento material se contrasta con la tesis");
+  eq_(s12.proposals, 1, "propuesta creada");
+  view = (await getThesisView("a-aapl"))!;
+  eq_(view.pending.length, 1, "una propuesta pendiente");
+  eq_(view.assumptions[0].status, "at_risk", "nada se aplica hasta aceptar");
+
+  // Duplicado: el mismo evento no genera otra propuesta.
+  const again = await proposeFromEvent(proposed[0], { check: async () => { throw new Error("no deberia llamarse"); } });
+  eq_(again, null, "el mismo evento no se propone dos veces");
+
+  // Rechazar no cambia nada; aceptar aplica.
+  const pendingId = view.pending[0].id;
+  eq_(await resolveProposal(pendingId, false), true, "rechazar resuelve");
+  view = (await getThesisView("a-aapl"))!;
+  eq_(view.assumptions[0].status, "at_risk", "rechazada: el supuesto no cambia");
+  eq_(await resolveProposal(pendingId, true), false, "una propuesta resuelta no se puede volver a resolver");
+
+  // Otra propuesta directa (sin motor) y aceptacion.
+  const change2 = await proposeFromEvent(proposed[0], { check: async () => ({ model: "m", object: { material: true, summary: "s", assumption_updates: [{ id: view.assumptions[0].id, status: "broken", reason: "r" }], breaker_hit: true, breaker: "margen < 25%", conviction_delta: -1 } }) });
+  eq_(change2, null, "sigue sin duplicar aunque la anterior fuera rechazada (una por evento)");
+  const manual = await db.insert(thesisChanges).values({
+    id: "chg-manual", thesisId, eventId: null, kind: "proposal", summary: "manual", status: "pending", createdAt: Date.now(),
+    payload: JSON.stringify({ assumption_updates: [{ id: view.assumptions[0].id, status: "broken", reason: "25% < 27%" }], breaker_hit: true, breaker: "x", conviction_delta: -1 }),
+  }).returning({ id: thesisChanges.id });
+  eq_(await resolveProposal(manual[0].id, true), true, "aceptar resuelve");
+  view = (await getThesisView("a-aapl"))!;
+  eq_(view.assumptions[0].status, "broken", "aceptada: el supuesto pasa a roto");
+  eq_(view.assumptions[0].note, "25% < 27%", "con la razon como nota");
+  eq_(view.thesis.conviction, 3, "conviccion baja de 4 a 3");
+  truthy_(view.thesis.thesis.includes("[Roto] margen operativo"), "el markdown refleja el estado nuevo");
+
+  // -------------------------------------------------------------------------
+  console.log("\n13. Filings y fundamentales en el prompt de extraccion");
+  await db.insert(fundamentals).values({
+    assetId: "a-aapl",
+    metrics: JSON.stringify({ pe: 30, operatingMargin: 31 }),
+    earnings: "[]",
+    nextEarningsAt: null,
+    updatedAt: Date.now(),
+  });
+  await db.insert(news).values([
+    newsRow("AAPL presenta 8-K ante la SEC: Item 2.02 (Resultados de operaciones)", {
+      id: "n-8k", source: "SEC EDGAR", url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000090/aapl-8k.htm",
+      kind: "filing", body: "Apple reported operating margin of 25.1% for the quarter. Revenue grew 3%.", summary: "Documento primario.",
+    }),
+  ]);
+  const ai13 = fakeAI({}, (cluster) => {
+    const ctx13 = { tracked: [{ symbol: "AAPL", name: "Apple", assetClass: "equity" }], positions: [], watchlist: [], theses: new Map<string, string>(), fundamentals: new Map([["AAPL", "P/E 30.0, margen operativo 31.0%"]]) };
+    const prompt = buildExtractPrompt(cluster, ctx13);
+    truthy_(prompt.includes("tier 1 · SEC EDGAR"), "el filing entra como tier 1");
+    truthy_(prompt.includes("Extracto del documento: «Apple reported operating margin"), "con extracto del cuerpo");
+    truthy_(prompt.includes("Fundamentales (Finnhub"), "y con la linea de fundamentales");
+    return success({ headline: "Resultados trimestrales", type: "earnings", thesis_impact: -10 });
+  });
+  const s13 = await processEvents({ trigger: "test" }, ai13.deps);
+  eq_(s13.created, 1, "el filing genera un evento");
+  const filingEvent = (await recentEvents({ minPriority: "P5" })).find((e) => e.headline === "Resultados trimestrales")!;
+  eq_(filingEvent.sourceTier, 1, "evento con tier 1");
 
   console.log(`\n${checks - failures}/${checks} comprobaciones correctas`);
   if (failures > 0) {

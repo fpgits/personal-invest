@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Bot, FileText, Send, ShieldAlert, User } from "lucide-react";
-import { AssetSearch } from "@/components/asset-search";
 import { Card, PageTitle } from "@/components/ui";
-import type { SearchHit } from "@/lib/market/types";
 import { api } from "@/lib/utils";
+import { ThesisPanel } from "./thesis-panel";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -16,8 +16,23 @@ const SUGGESTIONS = [
   "Que noticias recientes afectan a lo que tengo?",
 ];
 
+type Tab = "chat" | "riesgo" | "tesis";
+
 export default function AnalisisPage() {
-  const [tab, setTab] = useState<"chat" | "riesgo" | "tesis">("chat");
+  return (
+    <Suspense fallback={null}>
+      <AnalisisInner />
+    </Suspense>
+  );
+}
+
+function AnalisisInner() {
+  // ?tab=tesis&pending=1 abre la pestana de tesis (enlace desde Alertas).
+  const params = useSearchParams();
+  const fromQuery: Tab = params.get("tab") === "tesis" ? "tesis" : "chat";
+  const focusPending = params.get("pending") === "1";
+  const [override, setTab] = useState<Tab | null>(null);
+  const tab = override ?? fromQuery;
 
   return (
     <>
@@ -50,7 +65,7 @@ export default function AnalisisPage() {
 
       {tab === "chat" && <Chat />}
       {tab === "riesgo" && <RiskPanel />}
-      {tab === "tesis" && <ThesisPanel />}
+      {tab === "tesis" && <ThesisPanel focusPending={focusPending} />}
     </>
   );
 }
@@ -228,76 +243,6 @@ function RiskPanel() {
       {analysis && (
         <div className="fade-up mt-5 whitespace-pre-wrap border-t border-border pt-5 text-sm leading-relaxed">
           {analysis}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function ThesisPanel() {
-  const [asset, setAsset] = useState<SearchHit | null>(null);
-  const [thesis, setThesis] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  async function generate(hit: SearchHit) {
-    setAsset(hit);
-    setThesis(null);
-    setSaved(false);
-    setBusy(true);
-    const res = await fetch(api("/api/ai/thesis"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ symbol: hit.symbol, assetClass: hit.assetClass }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    setThesis(res.ok ? data.thesis : (data.error ?? "Error"));
-  }
-
-  async function save() {
-    if (!asset || !thesis) return;
-    await fetch(api("/api/ai/thesis"), {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        symbol: asset.symbol,
-        assetClass: asset.assetClass,
-        thesis,
-      }),
-    });
-    setSaved(true);
-  }
-
-  return (
-    <Card>
-      <p className="mb-3 text-sm text-muted">
-        Genera una tesis estructurada con caso alcista, caso bajista y que
-        vigilar. Guardala para que el chat la tenga en cuenta despues.
-      </p>
-      <AssetSearch onPick={generate} placeholder="Elige un activo..." />
-
-      {busy && (
-        <p className="pulse-soft mt-5 text-sm text-faint">
-          Escribiendo la tesis de {asset?.symbol}...
-        </p>
-      )}
-
-      {thesis && (
-        <div className="fade-up mt-5 border-t border-border pt-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-medium">{asset?.symbol}</h3>
-            <button
-              onClick={save}
-              disabled={saved}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs transition hover:border-border-strong disabled:opacity-50"
-            >
-              {saved ? "Guardada" : "Guardar tesis"}
-            </button>
-          </div>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">
-            {thesis}
-          </div>
         </div>
       )}
     </Card>

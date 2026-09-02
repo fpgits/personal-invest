@@ -85,6 +85,10 @@ export type IntelNews = {
   impact: string | null;
   tickers: string[];
   publishedAt: number;
+  /** news | filing */
+  kind?: string;
+  /** Texto del documento primario (solo filings). */
+  body?: string | null;
 };
 
 /** Grupo de noticias que hablan del mismo hecho. */

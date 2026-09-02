@@ -22,8 +22,8 @@ construye. Se actualiza con cada iteracion.
 - **Precios**: Finnhub (bolsa) y CoinGecko (cripto), con cache y TTL por clase.
 - **Motor de P&L** (`lib/portfolio.ts`): coste medio/FIFO, coste estimado para
   depositos sin precio, reparto por lado.
-- **Crons**: precios (15 min en mercado), sync (6 h), snapshot diario, noticias (4 h),
-  eventos (4 h, media hora despues de noticias).
+- **Crons**: precios (15 min en mercado), sync (6 h), snapshot diario, noticias +
+  filings (4 h), eventos (4 h, media hora despues), fundamentales (diario).
 
 ### Ingesta de noticias (existe, pero es una sola fuente)
 - `lib/news.ts` + `lib/market/finnhub.ts`: trae `company-news` de los activos
@@ -53,19 +53,19 @@ construye. Se actualiza con cada iteracion.
 
 | Etapa del bucle           | Estado   | Detalle                                                                 |
 | ------------------------- | -------- | ----------------------------------------------------------------------- |
-| Ingesta multi-fuente      | Parcial  | Solo Finnhub. Sin proveedores modulares, sin RSS, sin filings/SEC.      |
+| Ingesta multi-fuente      | Parcial  | Finnhub (titulares + cripto etiquetada) y SEC EDGAR (filings). Sin RSS. |
 | Tier de fiabilidad        | Hecho    | `intel/sources.ts`: 1..4 por fuente/host; tier 4 capado a P4.          |
 | Deduplicacion por evento  | Hecho    | Lexica + semantica (`intel/dedup.ts`, `planMerge`); un evento por hecho.|
 | Extraccion de eventos     | Hecho    | `intel/extract.ts`: evento estructurado y validado por cluster.         |
 | Mapeo de empresas         | Parcial  | Solo simbolos ya seguidos; relevancia real desde el motor de P&L.       |
 | Grafo de relaciones       | Falta    | Sin proveedores/clientes/competidores; sin efectos de 2o/3er orden.     |
 | Pipeline por etapas       | Hecho    | Cron cada 4 h + ejecucion manual; etapas separadas en `intel/`.         |
-| Motor de tesis            | Parcial  | Tesis en texto; sin estructura ni score de cambio de tesis.             |
+| Motor de tesis            | Hecho    | Supuestos con estado, rompe-tesis, propuestas desde eventos, historial. |
 | Score de senal            | Hecho    | `intel/score.ts`: pesos calibrables, techos, P1..P5.                    |
 | Alertas P1-P5             | Parcial  | Tabla, generacion y UI (`/invest/alertas`). Falta notificar fuera.      |
 | Hecho / inferencia / esp. | Hecho    | Columnas `fact` / `inference` / `assessment`, etiquetadas en la UI.      |
 | Citas de evidencia        | Hecho    | `event_sources`: cada evento enlaza sus noticias con tier.              |
-| Memoria acumulativa       | Falta    | Cada analisis es aislado; no detecta patrones semana a semana.          |
+| Memoria acumulativa       | Parcial  | La tesis acumula estado por supuesto; sin deteccion de patrones aun.    |
 | Informe diario            | Falta    |                                                                         |
 | Scorecards / descubrimiento | Falta  | Fases posteriores.                                                      |
 
@@ -211,15 +211,101 @@ cron (502 cuando el modelo no respondio o rechazo todo).
 
 ---
 
-## 4. Siguiente iteracion recomendada
+## 4. Iteracion 2 (hecha): tesis con supuestos, fuentes primarias y calibracion
 
-**Entrega de alertas + tesis estructurada**, en este orden:
+Lo que faltaba para que el motor hiciera algo parecido a fundamental: un
+objeto contra el que contrastar los eventos, datos primarios en vez de
+titulares, y una forma de saber si las alertas sirven.
 
-1. **Notificacion P1/P2** por Telegram (bot, un chat) desde `run.ts` al crear
-   un evento >= P2. Es lo que convierte el feed en "hey, mira esto".
-2. **Tesis estructurada** (`theses` → bull/bear/supuestos/rompe-tesis) y
-   `thesis_changes`: cada evento con `|thesis_impact| >= 40` propone un cambio
-   de tesis que el usuario acepta o rechaza. Con eso el motor deja de ser
-   por-evento y empieza a acumular memoria por activo.
-3. **Segunda fuente de ingesta** (RSS de comunicados/IR y SEC EDGAR para los
-   tickers seguidos) detras de una interfaz `NewsProvider` comun.
+### Tesis estructurada (`src/lib/thesis.ts`, `/api/theses`, pestana Tesis)
+
+- `theses.structure` (JSON: resumen, bull, bear, breakers, watch) +
+  `thesis_assumptions` (supuestos medibles: metric, statement, target,
+  comparator, unit, **status** on_track / at_risk / broken / unknown) +
+  `thesis_changes` (historial y propuestas: generated / manual / proposal,
+  pending / accepted / rejected / applied).
+- Generacion con `generateObject` (modelo de analisis) y contexto real:
+  posicion, fundamentales de Finnhub, eventos P1-P3 recientes y la tesis
+  previa (el prompt exige actualizar, no reinventar). Al guardar, los
+  supuestos se casan por `metric` para conservar estado e historial.
+- **Bucle con el motor**: un evento P1-P3 con |thesis_impact| >= 40 sobre un
+  activo con tesis dispara una llamada de contraste (`THESIS_CHECK_SYSTEM`)
+  que propone cambios de estado por supuesto, si se cumple un rompe-tesis y
+  un delta de conviccion. Se guarda como propuesta **pendiente**; nada se
+  aplica hasta que el usuario acepta. Reglas: "broken" solo con hechos,
+  nunca con inferencias; eventos tier 4 o P4/P5 no proponen; una propuesta
+  por evento; tope de 4 por pasada.
+- El markdown de `theses.thesis` se regenera con los estados, asi que el chat
+  sigue viendo la tesis actual.
+
+### Fuentes primarias
+
+- **SEC EDGAR** (`src/lib/edgar.ts`): ticker → CIK con `company_tickers.json`
+  (cacheado, guardado en `assets.cik`), `submissions` por empresa, filings de
+  los ultimos 14 dias de los formularios 8-K, 10-K, 10-Q, 20-F, 6-K, SC 13D.
+  Los 8-K se clasifican por items (2.02 resultados, 5.02 directivos, 1.01
+  acuerdo material...; solo 9.01 o 5.07 se descartan). Se descarga el
+  documento principal (y el anexo 99 si la carta es boilerplate), se pasa a
+  texto y se guarda en `news.body` (kind = filing, fuente SEC EDGAR, tier 1,
+  impacto por item, ya "resumido" sin IA). En el prompt de extraccion entran
+  hasta 2 extractos de 3.000 caracteres. Requiere `SEC_CONTACT_EMAIL` (la SEC
+  exige identificarse en el User-Agent). Maximo 8 documentos por pasada.
+- **Fundamentales** (`src/lib/fundamentals.ts`, cron diario
+  `/api/cron/fundamentals`): `/stock/metric`, `/stock/earnings` y
+  `/calendar/earnings` de Finnhub, normalizados a un conjunto estable
+  (P/E, P/S, P/B, crecimiento, margenes, ROE, deuda/equity, yield, rango
+  52s) con nulls cuando no hay dato: nada se inventa. Entran en la tesis y en
+  el prompt de eventos como una linea compacta.
+- **Cripto**: las noticias de la categoria cripto de Finnhub se etiquetan por
+  nombre completo o simbolo (>= 3 letras, palabra entera); nombres que son
+  palabras corrientes (Optimism, Render, Near...) solo por simbolo. Un
+  simbolo de 2 letras con nombre ambiguo queda sin cobertura: limite
+  conocido.
+- **Resumen de noticias**: si el modelo rapido falla, se reintenta el lote con
+  el de analisis; el ultimo error queda en `settings.news_last_error` y se
+  muestra en Noticias. `/api/models` comprueba que los ids configurados
+  existen en el catalogo y Ajustes lo avisa.
+
+### Calibracion (`src/lib/intel/calibration.ts`, `/api/intel/calibration`)
+
+- Informe: eventos valorados por prioridad, utiles y desglose por tipo de
+  feedback; precision = utiles / valorados.
+- Pesos del score sobrescribibles en `settings.intel_weights`; el motor los
+  carga en cada pasada. Sugerencia automatica solo con >= 30 valorados y >= 5
+  de cada clase: separacion media (utiles − no utiles) por componente,
+  normalizada con suelo 0.05. Se aplica o se restaura desde Alertas →
+  Calibracion. Con pocas muestras no se sugiere nada: sobreajustar cinco
+  pesos con veinte votos seria peor que dejarlos.
+
+### Como se prueba (iteracion 2)
+
+- `npm run test:sources`: 67 comprobaciones sin red: HTML→texto de EDGAR
+  (iXBRL, entidades, tablas), submissions y clasificacion de filings,
+  normalizacion de metricas y texto de fundamentales, etiquetado cripto,
+  esquema/render/saneado de tesis, prompt de contraste y propuesta,
+  calibracion (informe, sugerencia con suelo, pesos a mano).
+- `test:intel:db` ampliado a 94: tesis guardada y re-guardada conservando
+  estados, propuesta desde un evento material con IA inyectada, no
+  duplicacion, rechazar/aceptar (estado, nota, conviccion, markdown), filing
+  con extracto y fundamentales en el prompt, evento tier 1.
+
+### Que sigue sin hacer
+
+- Notificacion fuera de la app (Telegram/email) para P1/P2 y propuestas.
+- Los supuestos con target numerico no se contrastan automaticamente contra
+  los fundamentales (p. ej. margen operativo real vs >= 28%); hoy lo hace el
+  modelo al contrastar eventos. Un chequeo deterministico trimestral es la
+  siguiente pieza barata.
+- Transcripciones de llamadas de resultados y estimaciones de consenso
+  (de pago).
+
+---
+
+## 5. Siguiente iteracion recomendada
+
+1. **Chequeo deterministico de supuestos**: tras cada refresco de
+   fundamentales, comparar `target`/`comparator` con la metrica real y
+   proponer at_risk/broken sin IA.
+2. **Notificacion** (Telegram) de P1/P2 y de propuestas pendientes.
+3. **Segunda fuente de titulares** con tickers (o RSS de IR) detras de una
+   interfaz `NewsProvider`.

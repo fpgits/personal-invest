@@ -12,8 +12,10 @@ import {
   type NewsRow,
 } from "@/db/schema";
 import { listAssets } from "@/lib/assets";
+import { fundamentalsToText, getFundamentalsMap } from "@/lib/fundamentals";
 import { computePortfolio } from "@/lib/portfolio";
 import { getSetting, setSetting } from "@/lib/settings";
+import { proposeFromEvent } from "@/lib/thesis";
 import { id } from "@/lib/utils";
 import {
   applyMergePlan,
@@ -27,7 +29,8 @@ import {
   type ExtractContext,
   type ExtractResult,
 } from "./extract";
-import { portfolioRelevance, scoreSignal } from "./score";
+import { loadWeights } from "./calibration";
+import { portfolioRelevance, scoreSignal, SIGNAL_WEIGHTS, type Weights } from "./score";
 import { bestTier, hostOf, sourceTier } from "./sources";
 import {
   FEEDBACK_VALUES,
@@ -71,6 +74,10 @@ export const INTEL_LIMITS = {
   deadlineMs: 200_000,
   /** Vida del cerrojo; mayor que la duracion maxima de la funcion. */
   lockTtlMs: 6 * 60_000,
+  /** Propuestas de cambio de tesis (una llamada cada una) por pasada. */
+  proposalsPerRun: 4,
+  /** |thesis_impact| minimo para que un evento pase a contrastarse con la tesis. */
+  proposalMinImpact: 40,
 } as const;
 
 export const LAST_RUN_KEY = "intel_last_run";
@@ -95,6 +102,8 @@ export type RunStats = {
   rejected: number;
   transient: number;
   abandoned: number;
+  /** Propuestas de cambio de tesis creadas a partir de eventos. */
+  proposals: number;
   /** Ultimo error del modelo, para verlo en la UI y en los logs sin adivinar. */
   error?: string;
   warning?: string;
@@ -105,12 +114,15 @@ export type RunStats = {
 export type IntelDeps = {
   extract: (cluster: Cluster, ctx: ExtractContext) => Promise<ExtractResult>;
   merge: typeof defaultMerge;
+  /** Contrasta un evento con la tesis de su activo; devuelve el id de la propuesta o null. */
+  propose: (eventId: string) => Promise<string | null>;
   now: () => number;
 };
 
 const defaultDeps: IntelDeps = {
   extract: defaultExtract,
   merge: defaultMerge,
+  propose: (eventId) => proposeFromEvent(eventId),
   now: () => Date.now(),
 };
 
@@ -125,6 +137,7 @@ export async function processEvents(
     startedAt, finishedAt: startedAt, trigger: opts.trigger ?? "manual",
     scanned: 0, skipped: 0, unsummarized: 0, clusters: 0, attached: 0, created: 0,
     updated: 0, noise: 0, deferred: 0, invalid: 0, rejected: 0, transient: 0, abandoned: 0,
+    proposals: 0,
   };
 
   if (!(await acquireLock(startedAt, L.lockTtlMs))) {
@@ -148,7 +161,7 @@ export async function processEvents(
         `sin_resumen=${stats.unsummarized} clusters=${stats.clusters} nuevos=${stats.created} ` +
         `actualizados=${stats.updated} ruido=${stats.noise} enganchados=${stats.attached} ` +
         `pendientes=${stats.deferred} invalidos=${stats.invalid} rechazados=${stats.rejected} ` +
-        `transitorios=${stats.transient} abandonados=${stats.abandoned} ` +
+        `transitorios=${stats.transient} abandonados=${stats.abandoned} propuestas=${stats.proposals} ` +
         `ms=${stats.finishedAt - stats.startedAt}` +
         (stats.error ? ` error=${JSON.stringify(stats.error)}` : "") +
         (stats.warning ? ` aviso=${JSON.stringify(stats.warning)}` : ""),
@@ -251,6 +264,7 @@ async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
   for (const cluster of budget) jobs.push({ cluster, newItems: cluster.items });
 
   let successes = 0;
+  const material: string[] = [];
   for (let j = 0; j < jobs.length; j++) {
     const { cluster, newItems, reanalyzeId } = jobs[j];
     const remaining = jobs.length - j - 1;
@@ -317,6 +331,7 @@ async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
         .where(eq(events.id, reanalyzeId));
       await attachSources(reanalyzeId, newItems, now);
       stats.updated++;
+      if (isMaterial(res.event, scored.priority, L)) material.push(reanalyzeId);
       continue;
     }
 
@@ -344,11 +359,33 @@ async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
       stats.noise++;
     } else {
       stats.created++;
+      if (isMaterial(res.event, scored.priority, L)) material.push(eventId);
     }
 
     if (eventId) await attachSources(eventId, allItems, now);
     else await markProcessed(allItems.map((i) => i.id), now);
   }
+
+  // 5. Los eventos materiales se contrastan con la tesis de su activo (si la
+  //    hay): el modelo propone cambios de estado en los supuestos y el
+  //    usuario decide. Acotado por pasada y por tiempo.
+  for (const eventId of material.slice(0, L.proposalsPerRun)) {
+    if (D.now() - stats.startedAt > L.deadlineMs) break;
+    try {
+      const created = await D.propose(eventId);
+      if (created) stats.proposals++;
+    } catch (e) {
+      console.warn("[intel] propuesta de tesis fallo:", e instanceof Error ? e.message : String(e));
+    }
+  }
+}
+
+function isMaterial(ev: ExtractedEvent, priority: Priority, L: typeof INTEL_LIMITS): boolean {
+  return (
+    !ev.is_noise &&
+    (priority === "P1" || priority === "P2" || priority === "P3") &&
+    Math.abs(ev.thesis_impact) >= L.proposalMinImpact
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -471,10 +508,11 @@ async function releaseLock() {
 type Context = ExtractContext & {
   relevance: Parameters<typeof portfolioRelevance>[1];
   assetIdBySymbol: Map<string, string>;
+  weights: Weights;
 };
 
 async function buildContext(stats: RunStats): Promise<Context> {
-  const [all, portfolio, watch, thesisRows] = await Promise.all([
+  const [all, portfolio, watch, thesisRows, weightsLoaded] = await Promise.all([
     listAssets(),
     // Pesos con precios en cache: no gastamos cuota de precios ni tiempo
     // refrescando; para la relevancia basta con el ultimo valor conocido.
@@ -492,9 +530,17 @@ async function buildContext(stats: RunStats): Promise<Context> {
       .select({ symbol: assets.symbol, thesis: theses.thesis })
       .from(theses)
       .innerJoin(assets, eq(theses.assetId, assets.id)),
+    loadWeights().catch(() => ({ weights: SIGNAL_WEIGHTS, customized: false })),
   ]);
 
   const nonCash = all.filter((a) => a.assetClass !== "cash");
+  const fundMap = await getFundamentalsMap(nonCash.map((a) => a.id)).catch(() => new Map());
+  const fundamentalsBySymbol = new Map<string, string>();
+  for (const a of nonCash) {
+    const f = fundMap.get(a.id);
+    const text = f ? fundamentalsToText(f) : "";
+    if (text) fundamentalsBySymbol.set(a.symbol.toUpperCase(), text);
+  }
   const tracked = nonCash.map((a) => ({
     symbol: a.symbol.toUpperCase(),
     name: a.name,
@@ -519,8 +565,10 @@ async function buildContext(stats: RunStats): Promise<Context> {
     positions,
     watchlist: watchSymbols,
     theses: new Map(thesisRows.map((t) => [t.symbol.toUpperCase(), t.thesis])),
+    fundamentals: fundamentalsBySymbol,
     relevance: { positions, watchlist: watchSymbols, known: tracked.map((t) => t.symbol) },
     assetIdBySymbol,
+    weights: weightsLoaded.weights,
   };
 }
 
@@ -528,15 +576,18 @@ type Scored = { score: number; priority: Priority; relevance: number };
 
 function scoreFor(ev: ExtractedEvent, ctx: Context, tier: SourceTier, hosts: number): Scored {
   const relevance = portfolioRelevance(ev.companies, ctx.relevance);
-  const { score, priority } = scoreSignal({
-    materiality: ev.materiality,
-    confidence: ev.confidence,
-    thesisImpact: ev.thesis_impact,
-    portfolioRelevance: relevance,
-    sourceTier: tier,
-    isNoise: ev.is_noise,
-    distinctHosts: hosts,
-  });
+  const { score, priority } = scoreSignal(
+    {
+      materiality: ev.materiality,
+      confidence: ev.confidence,
+      thesisImpact: ev.thesis_impact,
+      portfolioRelevance: relevance,
+      sourceTier: tier,
+      isNoise: ev.is_noise,
+      distinctHosts: hosts,
+    },
+    ctx.weights,
+  );
   return { score, priority, relevance };
 }
 
@@ -677,6 +728,8 @@ function toIntelNews(n: NewsRow, tickers: string[]): IntelNews {
     impact: n.impact,
     tickers,
     publishedAt: n.publishedAt,
+    kind: n.kind,
+    body: n.body,
   };
 }
 

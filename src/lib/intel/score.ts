@@ -8,13 +8,21 @@ import type { Priority, SourceTier } from "./types";
  * Los pesos suman 1 y estan aqui, no repartidos por el codigo, para poder
  * recalibrarlos con el feedback (util / ruido / tarde...) sin tocar nada mas.
  */
-export const SIGNAL_WEIGHTS = {
+export type Weights = {
+  materiality: number;
+  confidence: number;
+  thesisImpact: number;
+  portfolioRelevance: number;
+  sourceReliability: number;
+};
+
+export const SIGNAL_WEIGHTS: Weights = {
   materiality: 0.3,
   confidence: 0.2,
   thesisImpact: 0.25,
   portfolioRelevance: 0.15,
   sourceReliability: 0.1,
-} as const;
+};
 
 /** Umbral minimo de score para cada prioridad; por debajo de P4 es P5 (ruido). */
 export const PRIORITY_THRESHOLDS: Array<[Priority, number]> = [
@@ -61,8 +69,10 @@ export function priorityFor(score: number): Priority {
   return "P5";
 }
 
-export function scoreSignal(i: ScoreInput): { score: number; priority: Priority } {
-  const w = SIGNAL_WEIGHTS;
+export function scoreSignal(
+  i: ScoreInput,
+  w: Weights = SIGNAL_WEIGHTS,
+): { score: number; priority: Priority } {
   let score =
     w.materiality * clamp(i.materiality) +
     w.confidence * clamp(i.confidence) +

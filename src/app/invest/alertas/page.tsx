@@ -1,10 +1,13 @@
 "use client";
 
 import useSWR from "swr";
+import Link from "next/link";
 import { useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
+import type { CalibrationReport } from "@/lib/intel/calibration";
 import type { EventWithSources, RunStats } from "@/lib/intel/run";
+import type { Weights } from "@/lib/intel/score";
 import {
   EVENT_TYPE_LABELS,
   HORIZON_LABELS,
@@ -73,9 +76,10 @@ export default function AlertasPage() {
   const [filter, setFilter] = useState<Filter>("signals");
   const min = FILTERS.find((f) => f.id === filter)!.min;
   const { data, error, mutate, isLoading } = useSWR<{
-    events: EventWithSources[];
+    events: Array<EventWithSources & { proposalId: string | null }>;
     lastRun: RunStats | null;
   }>(api(`/api/events?min=${min}`), fetcher);
+  const [showCalibration, setShowCalibration] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
@@ -140,12 +144,23 @@ export default function AlertasPage() {
             {f.label}
           </button>
         ))}
+        <button
+          onClick={() => setShowCalibration((v) => !v)}
+          className={cn(
+            "flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm transition",
+            showCalibration ? "bg-surface-2 font-medium" : "text-muted hover:text-text",
+          )}
+        >
+          <SlidersHorizontal size={13} /> Calibracion
+        </button>
         {lastRun && (
           <span className="ml-auto text-xs text-faint">
             Ultima pasada ({lastRun.trigger}, {fmtDateTime(lastRun.finishedAt)}): {fmtRun(lastRun)}
           </span>
         )}
       </div>
+
+      {showCalibration && <CalibrationCard />}
 
       {(runError || error) && (
         <Card className="mb-4 border-down/40 text-sm">
@@ -203,7 +218,7 @@ function EventCard({
   event: ev,
   onFeedback,
 }: {
-  event: EventWithSources;
+  event: EventWithSources & { proposalId?: string | null };
   onFeedback: (id: string, feedback: Feedback | null) => Promise<void>;
 }) {
   const priority = ev.priority as Priority;
@@ -222,6 +237,12 @@ function EventCard({
           </Badge>
         ))}
         {ev.sourceTier === 4 && <Badge tone="warn">Fuente no verificada</Badge>}
+        {ev.sourceTier === 1 && <Badge tone="up">Fuente primaria</Badge>}
+        {ev.proposalId && (
+          <Link href="/invest/analisis?tab=tesis&pending=1" className="inline-flex">
+            <Badge tone="warn">Propuesta de tesis pendiente →</Badge>
+          </Link>
+        )}
         <span className="ml-auto text-xs text-faint">
           {fmtDateTime(ev.occurredAt)} · {ev.sources.length}{" "}
           {ev.sources.length === 1 ? "fuente" : "fuentes"}
@@ -327,5 +348,104 @@ function Block({ label, children }: { label: string; children: string }) {
       <dt className="text-[11px] font-semibold uppercase tracking-wide text-faint">{label}</dt>
       <dd className="mt-0.5 whitespace-pre-line text-muted">{children}</dd>
     </div>
+  );
+}
+
+const WEIGHT_LABELS: Record<keyof Weights, string> = {
+  materiality: "Materialidad",
+  confidence: "Confianza",
+  thesisImpact: "Impacto en tesis",
+  portfolioRelevance: "Relevancia cartera",
+  sourceReliability: "Fiabilidad fuente",
+};
+
+function CalibrationCard() {
+  const { data, error, mutate } = useSWR<CalibrationReport>(api("/api/intel/calibration"), fetcher);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function act(action: "suggest" | "reset") {
+    setBusy(true);
+    setMsg(null);
+    const res = await fetch(api("/api/intel/calibration"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) setMsg(json.error ?? "No se pudo aplicar");
+    await mutate();
+    setBusy(false);
+  }
+
+  if (error) return <Card className="mb-4 text-sm text-down">No se pudo cargar la calibracion.</Card>;
+  if (!data) return <Card className="mb-4 pulse-soft h-24" />;
+
+  const keys = Object.keys(data.weights) as Array<keyof Weights>;
+  return (
+    <Card className="mb-4 text-sm">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="font-medium">Calibracion con tu feedback</span>
+        <span className="text-xs text-faint">
+          {data.rated} de {data.total} eventos valorados
+        </span>
+        {data.customized && <Badge tone="accent">pesos personalizados</Badge>}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">Precision por prioridad</p>
+          <table className="w-full text-xs">
+            <tbody>
+              {data.byPriority.map((p) => (
+                <tr key={p.priority} className="border-t border-border">
+                  <td className="py-1 font-medium">{p.priority}</td>
+                  <td className="py-1 text-muted">{p.rated} valorados</td>
+                  <td className="py-1 text-muted">{p.useful} utiles</td>
+                  <td className="py-1 text-right">
+                    {p.precision === null ? <span className="text-faint">—</span> : `${Math.round(p.precision * 100)}%`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">Pesos del score</p>
+          <table className="w-full text-xs">
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k} className="border-t border-border">
+                  <td className="py-1">{WEIGHT_LABELS[k]}</td>
+                  <td className="py-1 text-right tnum">{data.weights[k].toFixed(2)}</td>
+                  <td className="py-1 text-right tnum text-faint">
+                    {data.suggestion ? `→ ${data.suggestion[k].toFixed(2)}` : `(${data.defaultWeights[k].toFixed(2)})`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs text-faint">{data.suggestionNote}</p>
+      {msg && <p className="mt-1 text-xs text-down">{msg}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          onClick={() => act("suggest")}
+          disabled={busy || !data.suggestion}
+          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+        >
+          Aplicar pesos sugeridos
+        </button>
+        <button
+          onClick={() => act("reset")}
+          disabled={busy || !data.customized}
+          className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition hover:text-text disabled:opacity-40"
+        >
+          Restaurar pesos por defecto
+        </button>
+      </div>
+    </Card>
   );
 }

@@ -71,4 +71,11 @@ export const env = {
   get baseCurrency() {
     return opt("BASE_CURRENCY", "USD");
   },
+  /**
+   * La SEC exige identificarse en el User-Agent (nombre y email de contacto)
+   * para usar EDGAR; sin ello responde 403. No es una clave: solo cortesia.
+   */
+  get secContactEmail() {
+    return opt("SEC_CONTACT_EMAIL");
+  },
 };

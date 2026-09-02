@@ -169,3 +169,124 @@ export async function marketNews(): Promise<NewsItem[]> {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Fundamentales basicos (plan free): ratios, resultados y calendario.
+
+/** Metricas con nombre estable; null cuando Finnhub no la trae. */
+export type FundamentalMetrics = {
+  marketCap: number | null;
+  pe: number | null;
+  ps: number | null;
+  pb: number | null;
+  beta: number | null;
+  revenueGrowthYoy: number | null;
+  epsGrowthYoy: number | null;
+  grossMargin: number | null;
+  operatingMargin: number | null;
+  netMargin: number | null;
+  roe: number | null;
+  debtToEquity: number | null;
+  currentRatio: number | null;
+  dividendYield: number | null;
+  high52: number | null;
+  low52: number | null;
+};
+
+type RawMetric = Record<string, number | string | null | undefined>;
+
+function pick(m: RawMetric, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = m[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+/** Normaliza el diccionario de `/stock/metric`, cuyas claves cambian de nombre. */
+export function normalizeMetrics(raw: RawMetric | null | undefined): FundamentalMetrics {
+  const m = raw ?? {};
+  return {
+    marketCap: pick(m, ["marketCapitalization"]),
+    pe: pick(m, ["peBasicExclExtraTTM", "peTTM", "peNormalizedAnnual", "peAnnual"]),
+    ps: pick(m, ["psTTM", "psAnnual"]),
+    pb: pick(m, ["pbQuarterly", "pbAnnual"]),
+    beta: pick(m, ["beta"]),
+    revenueGrowthYoy: pick(m, ["revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"]),
+    epsGrowthYoy: pick(m, ["epsGrowthTTMYoy", "epsGrowthQuarterlyYoy"]),
+    grossMargin: pick(m, ["grossMarginTTM", "grossMarginAnnual"]),
+    operatingMargin: pick(m, ["operatingMarginTTM", "operatingMarginAnnual"]),
+    netMargin: pick(m, ["netProfitMarginTTM", "netProfitMarginAnnual"]),
+    roe: pick(m, ["roeTTM", "roeRfy"]),
+    debtToEquity: pick(m, ["totalDebt/totalEquityQuarterly", "totalDebt/totalEquityAnnual"]),
+    currentRatio: pick(m, ["currentRatioQuarterly", "currentRatioAnnual"]),
+    dividendYield: pick(m, ["dividendYieldIndicatedAnnual", "currentDividendYieldTTM"]),
+    high52: pick(m, ["52WeekHigh"]),
+    low52: pick(m, ["52WeekLow"]),
+  };
+}
+
+export async function metrics(symbol: string): Promise<FundamentalMetrics | null> {
+  try {
+    const r = await call<{ metric?: RawMetric }>("/stock/metric", { symbol, metric: "all" });
+    if (!r?.metric || Object.keys(r.metric).length === 0) return null;
+    return normalizeMetrics(r.metric);
+  } catch {
+    return null;
+  }
+}
+
+export type EarningsQuarter = {
+  period: string;
+  actual: number | null;
+  estimate: number | null;
+  surprisePct: number | null;
+};
+
+export async function earnings(symbol: string, limit = 4): Promise<EarningsQuarter[]> {
+  try {
+    const r = await call<
+      Array<{ period?: string; actual?: number | null; estimate?: number | null; surprisePercent?: number | null }>
+    >("/stock/earnings", { symbol, limit: String(limit) });
+    return (r ?? [])
+      .filter((q) => q.period)
+      .map((q) => ({
+        period: q.period!,
+        actual: q.actual ?? null,
+        estimate: q.estimate ?? null,
+        surprisePct: q.surprisePercent ?? null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Proxima fecha de resultados en los siguientes `days` dias, o null. */
+export async function nextEarnings(symbol: string, days = 120): Promise<number | null> {
+  const from = new Date().toISOString().slice(0, 10);
+  const to = new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
+  try {
+    const r = await call<{ earningsCalendar?: Array<{ date?: string }> }>("/calendar/earnings", {
+      from,
+      to,
+      symbol,
+    });
+    const dates = (r?.earningsCalendar ?? [])
+      .map((e) => (e.date ? Date.parse(`${e.date}T00:00:00Z`) : NaN))
+      .filter((t) => Number.isFinite(t))
+      .sort((a, b) => a - b);
+    return dates[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Noticias de la categoria cripto. Llegan sin ticker: se etiquetan aparte. */
+export async function cryptoNews(): Promise<NewsItem[]> {
+  try {
+    const r = await call<Parameters<typeof toNews>[0]>("/news", { category: "crypto" });
+    return toNews(r ?? []).slice(0, 40);
+  } catch {
+    return [];
+  }
+}

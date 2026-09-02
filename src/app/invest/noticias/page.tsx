@@ -16,9 +16,10 @@ const SENTIMENT: Record<string, { label: string; tone: "up" | "down" | "neutral"
 };
 
 export default function NoticiasPage() {
-  const { data, mutate, isLoading } = useSWR<{ news: NewsRow[] }>(api("/api/news"),
-    fetcher,
-  );
+  const { data, mutate, isLoading } = useSWR<{
+    news: NewsRow[];
+    lastError?: { at: number; message: string } | null;
+  }>(api("/api/news"), fetcher);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<"all" | "high">("all");
 
@@ -67,6 +68,17 @@ export default function NoticiasPage() {
         ))}
       </div>
 
+      {data?.lastError?.message && (
+        <Card className="mb-4 border-warn/40 text-sm">
+          <p className="font-medium text-warn">El resumen con IA esta fallando</p>
+          <p className="mt-1 break-words text-muted">{data.lastError.message}</p>
+          <p className="mt-1 text-xs text-faint">
+            {fmtDateTime(data.lastError.at)} · Sin resumen, el motor de alertas no analiza estas noticias.
+            Revisa el modelo rapido en Ajustes.
+          </p>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="space-y-3">
           {[0, 1, 2, 3].map((i) => (
@@ -89,6 +101,7 @@ export default function NoticiasPage() {
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     {s && <Badge tone={s.tone}>{s.label}</Badge>}
                     {n.impact === "high" && <Badge tone="warn">Impacto alto</Badge>}
+                    {n.kind === "filing" && <Badge tone="up">SEC</Badge>}
                     {tickers.slice(0, 4).map((t) => (
                       <Badge key={t} tone="accent">
                         {t}

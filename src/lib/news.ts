@@ -2,12 +2,54 @@ import { generateObject } from "ai";
 import { desc, inArray, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { news, type NewsRow } from "@/db/schema";
-import { fastModel } from "./ai/client";
+import { news, type Asset, type NewsRow } from "@/db/schema";
+import { analysisModel, fastModel } from "./ai/client";
 import { NEWS_SYSTEM } from "./ai/prompts";
 import { listAssets } from "./assets";
-import { getNewsFor } from "./market";
+import { finnhub, getNewsFor } from "./market";
+import type { NewsItem } from "./market/types";
+import { getSetting, setSetting } from "./settings";
 import { id } from "./utils";
+
+export const NEWS_LAST_ERROR_KEY = "news_last_error";
+
+/**
+ * Las noticias cripto llegan sin ticker. Se etiquetan por nombre completo
+ * ("Ethereum") o por simbolo en mayusculas como palabra entera (ETH), con
+ * minimo de 3 letras para no casar con cualquier cosa. Puro y testeable.
+ */
+/**
+ * Nombres de monedas que son palabras corrientes: por nombre no cuentan
+ * ("Optimism grows..." no habla de OP); solo por simbolo.
+ */
+const AMBIGUOUS_NAMES = new Set([
+  "optimism", "render", "near", "flow", "sui", "gas", "one", "ton", "dash",
+  "fetch", "request", "status", "internet computer", "the graph", "aave",
+  "celo", "core", "beam", "pixels", "notcoin", "worldcoin", "mask network",
+]);
+
+export function tagCrypto(
+  headline: string,
+  tracked: Array<Pick<Asset, "symbol" | "name">>,
+): string[] {
+  const out: string[] = [];
+  for (const a of tracked) {
+    const symbol = a.symbol.toUpperCase();
+    const name = a.name.trim();
+    const byName =
+      name.length >= 4 &&
+      !AMBIGUOUS_NAMES.has(name.toLowerCase()) &&
+      new RegExp(`(^|[^A-Za-z])${escapeRe(name)}([^A-Za-z]|$)`, "i").test(headline);
+    const bySymbol =
+      symbol.length >= 3 && new RegExp(`(^|[^A-Za-z0-9])${escapeRe(symbol)}([^A-Za-z0-9]|$)`).test(headline);
+    if (byName || bySymbol) out.push(symbol);
+  }
+  return [...new Set(out)];
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const analysisSchema = z.object({
   items: z.array(
@@ -25,7 +67,21 @@ export async function ingestNews(): Promise<number> {
   const assets = await listAssets();
   if (assets.length === 0) return 0;
 
-  const items = await getNewsFor(assets);
+  const items: NewsItem[] = await getNewsFor(assets);
+
+  // Cripto: la categoria general de Finnhub, etiquetada por nombre/simbolo.
+  // Lo que no menciona ninguna de tus monedas no entra.
+  const cryptos = assets.filter((a) => a.assetClass === "crypto");
+  if (cryptos.length > 0) {
+    const seen = new Set(items.map((n) => n.url));
+    for (const n of await finnhub.cryptoNews()) {
+      if (seen.has(n.url)) continue;
+      const tickers = tagCrypto(n.headline, cryptos);
+      if (tickers.length === 0) continue;
+      items.push({ ...n, tickers });
+    }
+  }
+
   let inserted = 0;
 
   for (const n of items) {
@@ -78,13 +134,7 @@ export async function processNews(limit = 30): Promise<number> {
       .join("\n");
 
     try {
-      const { object } = await generateObject({
-        model: await fastModel(),
-        schema: analysisSchema,
-        system: NEWS_SYSTEM,
-        prompt: `Analiza estos titulares y devuelve un objeto por cada uno, usando el mismo index:\n\n${prompt}`,
-        temperature: 0.2,
-      });
+      const { object } = await summarizeBatch(prompt);
 
       for (const item of object.items) {
         const row = batch[item.index];
@@ -101,13 +151,14 @@ export async function processNews(limit = 30): Promise<number> {
         processed++;
       }
     } catch (e) {
-      // Si el modelo falla marcamos el lote como visto para no reintentar
-      // en bucle en cada cron. El titular sigue siendo util sin resumen.
-      // El motivo tiene que quedar en los logs: un modelo mal configurado
-      // se ve aqui, no en un 200 vacio.
-      console.error(
-        "[news] resumen fallo:",
-        e instanceof Error ? e.message : String(e),
+      // Si los dos modelos fallan marcamos el lote como visto para no
+      // reintentar en bucle en cada cron. El titular sigue siendo util sin
+      // resumen. El motivo queda en los logs y en Ajustes/Noticias: un modelo
+      // mal configurado se ve, no se esconde tras un 200 vacio.
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[news] resumen fallo:", message);
+      await setSetting(NEWS_LAST_ERROR_KEY, JSON.stringify({ at: Date.now(), message })).catch(
+        () => undefined,
       );
       for (const row of batch) {
         await db
@@ -118,7 +169,47 @@ export async function processNews(limit = 30): Promise<number> {
     }
   }
 
+  if (processed > 0) {
+    await setSetting(NEWS_LAST_ERROR_KEY, "").catch(() => undefined);
+  }
   return processed;
+}
+
+/**
+ * Resume con el modelo rapido y, si este falla (modelo mal configurado,
+ * sin salida estructurada, cuota), reintenta una vez con el de analisis:
+ * son 10 titulares, cuesta centimos, y deja el motor de eventos alimentado.
+ */
+async function summarizeBatch(prompt: string) {
+  const run = async (model: Awaited<ReturnType<typeof fastModel>>) =>
+    generateObject({
+      model,
+      schema: analysisSchema,
+      system: NEWS_SYSTEM,
+      prompt: `Analiza estos titulares y devuelve un objeto por cada uno, usando el mismo index:\n\n${prompt}`,
+      temperature: 0.2,
+      maxRetries: 1,
+      abortSignal: AbortSignal.timeout(45_000),
+    });
+  try {
+    return await run(await fastModel());
+  } catch (e) {
+    console.warn(
+      "[news] modelo rapido fallo, probando con el de analisis:",
+      e instanceof Error ? e.message : String(e),
+    );
+    return run(await analysisModel());
+  }
+}
+
+export async function newsLastError(): Promise<{ at: number; message: string } | null> {
+  const raw = await getSetting(NEWS_LAST_ERROR_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as { at: number; message: string };
+  } catch {
+    return null;
+  }
 }
 
 export async function recentNews(limit = 50): Promise<NewsRow[]> {

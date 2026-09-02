@@ -60,6 +60,7 @@ pantalla diciendo exactamente que falta.
 | `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
 | `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |
 | `FINNHUB_API_KEY` | no | finnhub.io/register. Sin esto no hay precios de acciones |
+| `SEC_CONTACT_EMAIL` | no | Tu email, para el User-Agent que exige la SEC. Sin esto no se leen filings de EDGAR |
 | `COINGECKO_API_KEY` | no | Opcional, sube el limite de 5-15 a 30 req/min |
 | `CRON_SECRET` | no | `openssl rand -hex 32`. Vercel lo manda como `Authorization: Bearer` |
 
@@ -158,7 +159,8 @@ npm run test           # todos
 npm run test:pnl
 npm run test:ibkr
 npm run test:intel     # motor de inteligencia, etapas puras
-npm run test:intel:db  # motor de inteligencia contra SQLite local
+npm run test:sources   # EDGAR, fundamentales, cripto, tesis, calibracion
+npm run test:intel:db  # motor + tesis contra SQLite local
 ```
 
 ## Deploy
@@ -175,8 +177,9 @@ Definidos en `vercel.json`. Necesitan `CRON_SECRET` o devuelven 401.
 | `/api/cron/prices` | cada 15 min, 13-21h L-V | Refresca precios (horario de mercado US en UTC) |
 | `/api/cron/sync` | cada 6 h | Sincroniza los exchanges conectados |
 | `/api/cron/snapshot` | 22:05 diario | Guarda la foto del dia. **Sin esto no hay grafico historico** |
-| `/api/cron/news` | cada 4 h | Trae titulares y los resume con el modelo rapido |
-| `/api/cron/events` | cada 4 h, a y media | Convierte noticias en eventos con score y prioridad (ver `docs/INTEL-ARCHITECTURE.md`) |
+| `/api/cron/news` | cada 4 h | Titulares (Finnhub) + filings (SEC EDGAR), y resumen con el modelo rapido |
+| `/api/cron/events` | cada 4 h, a y media | Convierte noticias en eventos con score y prioridad, y propone cambios de tesis (ver `docs/INTEL-ARCHITECTURE.md`) |
+| `/api/cron/fundamentals` | 06:45 diario | Fundamentales basicos de las acciones (Finnhub) |
 
 Estos horarios (cada 15 min, cada 4h, cada 6h) requieren el plan Pro de
 Vercel. En Hobby, cualquier cron mas frecuente que diario hace fallar el
@@ -236,7 +239,7 @@ src/
     api/          route handlers, incluidos los cron
     login/
   components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
-  db/             schema.ts (15 tablas) y cliente perezoso de libsql
+  db/             schema.ts (18 tablas) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
     market/       finnhub.ts, coingecko.ts y el router entre ambos
@@ -244,7 +247,10 @@ src/
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
     brokers/      ibkr.ts (Flex Web Service) y sync.ts (bolsa)
     ai/           client.ts, context.ts, prompts.ts
-    intel/        motor de inteligencia: sources, dedup, extract, score, run
+    intel/        motor de inteligencia: sources, dedup, extract, score, run, calibration
+    thesis.ts     tesis estructurada: supuestos, propuestas desde eventos, historial
+    edgar.ts      SEC EDGAR: CIK, filings, texto de 8-K/10-Q
+    fundamentals.ts  ratios y resultados de Finnhub
     crypto.ts     AES-256-GCM para las API keys, scrypt para la contrasena
   proxy.ts        guarda de sesion (antes middleware.ts)
 ```

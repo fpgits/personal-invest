@@ -24,6 +24,7 @@ export default function AjustesPage() {
   const { data } = useSWR<{
     models: ModelInfo[];
     current: { analysis: string; fast: string };
+    check?: { analysis: boolean; fast: boolean } | null;
     error?: string;
   }>(api("/api/models"), fetcher);
   const { data: settingsData, mutate } = useSWR<{
@@ -84,6 +85,21 @@ export default function AjustesPage() {
           <p className="mb-3 rounded-lg bg-down-dim/40 p-2.5 text-xs text-down">
             No se pudo leer el catalogo de OpenRouter ({data.error}). Puedes
             escribir el id del modelo a mano igualmente.
+          </p>
+        )}
+        {data?.check && (!data.check.analysis || !data.check.fast) && (
+          <p className="mb-3 rounded-lg bg-down-dim/40 p-2.5 text-xs text-down">
+            {!data.check.analysis && (
+              <>
+                El modelo de analisis <code>{data.current.analysis}</code> no existe en el catalogo de OpenRouter.{" "}
+              </>
+            )}
+            {!data.check.fast && (
+              <>
+                El modelo rapido <code>{data.current.fast}</code> no existe en el catalogo de OpenRouter.{" "}
+              </>
+            )}
+            Con un id inexistente, el resumen de noticias y el motor de alertas fallan. Elige uno de la lista y guarda.
           </p>
         )}
 

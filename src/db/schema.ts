@@ -24,6 +24,8 @@ export const assets = sqliteTable(
     /** Symbol de Finnhub (AAPL) o id de CoinGecko (bitcoin). */
     providerId: text("provider_id"),
     logoUrl: text("logo_url"),
+    /** CIK de la SEC (10 digitos con ceros), solo emisores que presentan en EDGAR. */
+    cik: text("cik"),
     createdAt: integer("created_at").notNull().default(now),
   },
   (t) => [
@@ -147,6 +149,13 @@ export const news = sqliteTable(
     source: text("source"),
     imageUrl: text("image_url"),
     publishedAt: integer("published_at").notNull(),
+    /** news | filing (documento primario de EDGAR) */
+    kind: text("kind").notNull().default("news"),
+    /**
+     * Texto extraido del documento, solo para filings (acotado). Las noticias
+     * de agregadores no lo tienen: no se descargan articulos de terceros.
+     */
+    body: text("body"),
     /** resumen generado por IA */
     summary: text("summary"),
     /** bullish | bearish | neutral */
@@ -190,10 +199,83 @@ export const theses = sqliteTable(
     horizon: text("horizon"),
     /** manual | modelo usado */
     generatedBy: text("generated_by").notNull().default("manual"),
+    /**
+     * JSON estructurado: { summary, bull[], bear[], breakers[], watch[] }.
+     * `thesis` sigue siendo la version en texto para el chat y la lectura.
+     */
+    structure: text("structure"),
     updatedAt: integer("updated_at").notNull().default(now),
   },
   (t) => [uniqueIndex("theses_asset_idx").on(t.assetId)],
 );
+
+/**
+ * Supuestos medibles de una tesis. Cada uno tiene un estado que cambia con
+ * la evidencia: un evento puede proponer pasarlo a "at_risk" o "broken", y el
+ * usuario acepta o rechaza. Esto es lo que convierte la tesis en memoria.
+ */
+export const thesisAssumptions = sqliteTable(
+  "thesis_assumptions",
+  {
+    id: text("id").primaryKey(),
+    thesisId: text("thesis_id")
+      .notNull()
+      .references(() => theses.id, { onDelete: "cascade" }),
+    /** Metrica o dimension: "crecimiento ingresos", "margen operativo", "cuota"... */
+    metric: text("metric").notNull(),
+    /** El supuesto en una frase, con el numero si lo hay. */
+    statement: text("statement").notNull(),
+    target: real("target"),
+    /** gte | lte, respecto a target */
+    comparator: text("comparator"),
+    unit: text("unit"),
+    /** on_track | at_risk | broken | unknown */
+    status: text("status").notNull().default("unknown"),
+    note: text("note"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
+  (t) => [index("thesis_assumptions_thesis_idx").on(t.thesisId, t.sortOrder)],
+);
+
+/** Historial y propuestas de cambio de una tesis. */
+export const thesisChanges = sqliteTable(
+  "thesis_changes",
+  {
+    id: text("id").primaryKey(),
+    thesisId: text("thesis_id")
+      .notNull()
+      .references(() => theses.id, { onDelete: "cascade" }),
+    /** Evento que lo motivo, si lo hay. */
+    eventId: text("event_id").references(() => events.id, { onDelete: "set null" }),
+    /** generated | manual | proposal */
+    kind: text("kind").notNull(),
+    summary: text("summary").notNull(),
+    /** JSON con el detalle: supuestos afectados, delta de conviccion, breaker. */
+    payload: text("payload").notNull().default("{}"),
+    /** pending | accepted | rejected | applied */
+    status: text("status").notNull().default("applied"),
+    createdAt: integer("created_at").notNull().default(now),
+    resolvedAt: integer("resolved_at"),
+  },
+  (t) => [
+    index("thesis_changes_thesis_idx").on(t.thesisId, t.createdAt),
+    index("thesis_changes_status_idx").on(t.status),
+  ],
+);
+
+/** Fundamentales basicos por activo (Finnhub): ratios, resultados, proxima fecha. */
+export const fundamentals = sqliteTable("fundamentals", {
+  assetId: text("asset_id")
+    .primaryKey()
+    .references(() => assets.id, { onDelete: "cascade" }),
+  /** JSON: subconjunto de metricas con nombre estable. */
+  metrics: text("metrics").notNull().default("{}"),
+  /** JSON: ultimos trimestres { period, actual, estimate, surprisePct }. */
+  earnings: text("earnings").notNull().default("[]"),
+  nextEarningsAt: integer("next_earnings_at"),
+  updatedAt: integer("updated_at").notNull().default(now),
+});
 
 export const aiThreads = sqliteTable("ai_threads", {
   id: text("id").primaryKey(),
@@ -334,3 +416,6 @@ export type PriceRow = typeof priceCache.$inferSelect;
 export type Snapshot = typeof snapshots.$inferSelect;
 export type NewsRow = typeof news.$inferSelect;
 export type Thesis = typeof theses.$inferSelect;
+export type ThesisAssumption = typeof thesisAssumptions.$inferSelect;
+export type ThesisChange = typeof thesisChanges.$inferSelect;
+export type Fundamentals = typeof fundamentals.$inferSelect;

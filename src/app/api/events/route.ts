@@ -8,6 +8,7 @@ import {
   recentEvents,
   setEventFeedback,
 } from "@/lib/intel";
+import { pendingProposalsByEvent } from "@/lib/thesis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +33,11 @@ export const GET = protectedRoute(async (req) => {
     recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit }),
     lastRun(),
   ]);
-  return Response.json({ events, lastRun: run });
+  const proposals = await pendingProposalsByEvent(events.map((e) => e.id));
+  return Response.json({
+    events: events.map((e) => ({ ...e, proposalId: proposals.get(e.id) ?? null })),
+    lastRun: run,
+  });
 });
 
 /** Ejecucion manual del motor desde la UI. Una pasada a la vez. */
