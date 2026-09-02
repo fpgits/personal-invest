@@ -79,7 +79,7 @@ export function Nav() {
       >
         <div className="mb-7 px-3 pt-8 md:pt-0">
           <Link href="/" className="block transition hover:opacity-80">
-            <p className="text-xs text-faint">Vault /</p>
+            <p className="text-xs text-faint">Fernando Portela /</p>
             <p className="text-sm font-semibold tracking-tight">Invest</p>
           </Link>
         </div>

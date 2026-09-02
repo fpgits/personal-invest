@@ -43,8 +43,8 @@ function LoginForm() {
         <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-surface">
           <LockKeyhole size={18} className="text-accent" />
         </div>
-        <h1 className="text-xl font-semibold">Vault</h1>
-        <p className="mt-1 text-sm text-muted">Tu espacio. Una sola llave.</p>
+        <h1 className="text-xl font-semibold">Fernando Portela</h1>
+        <p className="mt-1 text-sm text-muted">Pagina personal de Fernando Portela. Una sola llave.</p>
       </div>
 
       <label className="mb-2 block text-sm text-muted" htmlFor="password">

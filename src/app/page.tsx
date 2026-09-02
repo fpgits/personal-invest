@@ -26,10 +26,10 @@ export default function VaultHome() {
       <header className="mb-10 flex items-end justify-between gap-4">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
-            vault
+            Pagina personal
           </p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-            Todo en un sitio
+            Fernando Portela
           </h1>
         </div>
         <LogoutButton />

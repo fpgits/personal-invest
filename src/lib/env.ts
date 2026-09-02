@@ -30,7 +30,7 @@ export const env = {
     return opt("OPENROUTER_SITE_URL", "http://localhost:3000");
   },
   get siteName() {
-    return opt("OPENROUTER_SITE_NAME", "Inversiones");
+    return opt("OPENROUTER_SITE_NAME", "Fernando Portela");
   },
   get finnhubKey() {
     return opt("FINNHUB_API_KEY");

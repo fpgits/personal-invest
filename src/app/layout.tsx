@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Vault",
-  description: "El espacio personal de Fernando: todo en un sitio",
+  title: "Fernando Portela",
+  description: "Pagina personal de Fernando Portela: todo en un sitio",
 };
 
 /**
