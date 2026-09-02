@@ -119,6 +119,12 @@ export const snapshots = sqliteTable(
     realizedPnl: real("realized_pnl").notNull(),
     /** JSON: reparto por activo y por clase en ese momento */
     breakdown: text("breakdown").notNull().default("{}"),
+    /**
+     * live: foto tomada ese dia con precios en vivo (cron nocturno).
+     * rebuilt: reconstruida a posteriori con el libro de operaciones y
+     * cierres diarios (y el efectivo del Equity Summary de IBKR si lo hay).
+     */
+    source: text("source").notNull().default("live"),
     createdAt: integer("created_at").notNull().default(now),
   },
   (t) => [uniqueIndex("snapshots_date_idx").on(t.date)],

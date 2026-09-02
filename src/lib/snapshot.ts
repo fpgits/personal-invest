@@ -1,14 +1,31 @@
 import { and, asc, desc, gte, lt, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { snapshots, type Snapshot } from "@/db/schema";
-import { computePortfolio } from "./portfolio";
+import { computePortfolio, type PortfolioSummary } from "./portfolio";
 import { id, today } from "./utils";
 
 /**
- * Guarda la foto del dia. El grafico historico de la cartera sale de aqui:
- * no hay forma de reconstruirlo a posteriori sin precios historicos de todo.
+ * Una foto vale si las posiciones que importan tienen precio. Si el proveedor
+ * de precios fallo, guardar la foto contamina el historico (la del 31 de
+ * agosto de 2026 salio con 18 acciones a 0); mejor no guardar y que el cron
+ * reintente o que la reconstruccion la rellene con cierres de verdad.
  */
-export async function takeSnapshot(): Promise<Snapshot> {
+export function isReliableSummary(p: PortfolioSummary): boolean {
+  if (p.positions.length === 0) return false;
+  for (const x of p.positions) {
+    if (x.asset.assetClass === "cash") continue;
+    if (x.quantity > 0 && x.price <= 0 && x.costBasis > 100) return false;
+  }
+  return true;
+}
+
+export type SnapshotResult = { snapshot: Snapshot; stored: boolean; reason?: string };
+
+/**
+ * Guarda la foto del dia (precios en vivo). El grafico y el resultado por
+ * periodo salen de aqui. `force` guarda aunque falten precios.
+ */
+export async function takeSnapshot(opts: { force?: boolean } = {}): Promise<SnapshotResult> {
   const p = await computePortfolio();
   const date = today();
 
@@ -34,8 +51,23 @@ export async function takeSnapshot(): Promise<Snapshot> {
         realizedPnl: x.realizedPnl,
       })),
     }),
+    source: "live",
     createdAt: Date.now(),
   };
+
+  if (!opts.force && !isReliableSummary(p)) {
+    const missing = p.positions
+      .filter((x) => x.asset.assetClass !== "cash" && x.quantity > 0 && x.price <= 0)
+      .map((x) => x.asset.symbol);
+    return {
+      snapshot: row as Snapshot,
+      stored: false,
+      reason:
+        p.positions.length === 0
+          ? "cartera vacia"
+          : `sin precio: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? "…" : ""}`,
+    };
+  }
 
   await db
     .insert(snapshots)
@@ -48,10 +80,11 @@ export async function takeSnapshot(): Promise<Snapshot> {
         unrealizedPnl: row.unrealizedPnl,
         realizedPnl: row.realizedPnl,
         breakdown: row.breakdown,
+        source: "live",
       },
     });
 
-  return row as Snapshot;
+  return { snapshot: row as Snapshot, stored: true };
 }
 
 export async function history(days = 365): Promise<Snapshot[]> {

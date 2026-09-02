@@ -1,0 +1,1 @@
+ALTER TABLE `snapshots` ADD `source` text DEFAULT 'live' NOT NULL;

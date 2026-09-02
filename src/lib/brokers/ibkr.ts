@@ -54,6 +54,19 @@ export type FlexCash = {
 /** Saldo en efectivo por divisa (del Cash Report de la Flex Query). */
 export type FlexCashBalance = { currency: string; amount: number };
 
+/**
+ * Valor diario de la cuenta en divisa base (seccion "Equity Summary in Base
+ * by Report Date"). Es el historico que lleva el propio broker: sirve para
+ * reconstruir dias en los que la app aun no fotografiaba la cartera.
+ */
+export type FlexEquityDay = {
+  /** YYYY-MM-DD */
+  date: string;
+  cash: number;
+  stock: number;
+  total: number;
+};
+
 export type FlexStatement = {
   accountId: string;
   fromDate: string | null;
@@ -63,6 +76,8 @@ export type FlexStatement = {
   cash: FlexCash[];
   /** Saldo en efectivo actual por divisa. Vacio si la query no trae Cash Report. */
   cashBalances: FlexCashBalance[];
+  /** Valor diario de la cuenta. Vacio si la query no trae Equity Summary in Base. */
+  equitySummary: FlexEquityDay[];
   /** Filas que no sabemos mapear todavia (opciones, futuros, forex). */
   skipped: Array<{ symbol: string; assetCategory: string; reason: string }>;
 };
@@ -401,6 +416,9 @@ export function parseFlexStatement(xml: string): FlexStatement {
     cashBalances.push({ currency, amount });
   }
 
+  /* ---------- Valor diario (Equity Summary in Base) ---------- */
+  const equitySummary = parseEquitySummary(statement);
+
   return {
     accountId: attr(statement, "accountId"),
     fromDate: attr(statement, "fromDate") || null,
@@ -409,8 +427,29 @@ export function parseFlexStatement(xml: string): FlexStatement {
     positions,
     cash,
     cashBalances,
+    equitySummary,
     skipped,
   };
+}
+
+/**
+ * Filas EquitySummaryByReportDateInBase: una por dia con cash, stock y total
+ * en divisa base. Segun la version de la query el efectivo viene como `cash`
+ * o desglosado en `cashLong`/`cashShort`. Ordenadas por fecha, sin repetidas.
+ */
+export function parseEquitySummary(statement: XmlNode): FlexEquityDay[] {
+  const rows = asArray(child(statement, "EquitySummaryInBase").EquitySummaryByReportDateInBase);
+  const byDate = new Map<string, FlexEquityDay>();
+  for (const r of rows) {
+    const ms = parseFlexDate(attr(r, "reportDate"));
+    if (Number.isNaN(ms)) continue;
+    const date = new Date(ms).toISOString().slice(0, 10);
+    const cash = r.cash !== undefined && r.cash !== "" ? num(r.cash) : num(r.cashLong) + num(r.cashShort);
+    const stock = r.stock !== undefined && r.stock !== "" ? num(r.stock) : num(r.stockLong) + num(r.stockShort);
+    const total = num(r.total);
+    byDate.set(date, { date, cash, stock, total });
+  }
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 /** Solo los movimientos que son dividendos cobrados, no retenciones. */

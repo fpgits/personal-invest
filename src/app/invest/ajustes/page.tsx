@@ -2,8 +2,10 @@
 
 import useSWR from "swr";
 import { useState } from "react";
-import { Check } from "lucide-react";
+import { Check, RefreshCw } from "lucide-react";
 import { Card, CardTitle, PageTitle } from "@/components/ui";
+import type { HistorySummary, RebuildReport } from "@/lib/history";
+import { fmtDay } from "@/lib/period";
 import { api } from "@/lib/utils";
 
 type ModelInfo = {
@@ -177,7 +179,101 @@ export default function AjustesPage() {
         {saved && <Check size={15} />}
         {busy ? "Guardando..." : saved ? "Guardado" : "Guardar ajustes"}
       </button>
+
+      <HistoryCard />
     </>
+  );
+}
+
+/** Historico de la cartera: fotos diarias y reconstruccion de los dias que faltan. */
+function HistoryCard() {
+  const { data, mutate } = useSWR<HistorySummary>(api("/api/history"), fetcher);
+  const [running, setRunning] = useState(false);
+  const [report, setReport] = useState<RebuildReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function rebuild() {
+    setRunning(true);
+    setError(null);
+    setReport(null);
+    try {
+      const res = await fetch(api("/api/history"), { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      setReport(json.report as RebuildReport);
+      mutate(json.summary as HistorySummary, false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo reconstruir");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const unpriced = report ? Object.entries(report.unpriced).sort((a, b) => b[1] - a[1]) : [];
+
+  return (
+    <Card className="mt-6">
+      <CardTitle
+        action={
+          <button
+            onClick={rebuild}
+            disabled={running}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs transition hover:border-border-strong disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={running ? "animate-spin" : ""} />
+            {running ? "Reconstruyendo..." : "Reconstruir historico"}
+          </button>
+        }
+      >
+        Historico de la cartera
+      </CardTitle>
+      {data ? (
+        <p className="text-sm text-muted">
+          {data.total === 0
+            ? "Todavia no hay ninguna foto."
+            : `${data.total} fotos diarias (${data.live} en vivo, ${data.rebuilt} reconstruidas${data.unreliable > 0 ? `, ${data.unreliable} sin precios` : ""}), del ${data.first ? fmtDay(data.first) : "—"} al ${data.last ? fmtDay(data.last) : "—"}.`}
+          {data.firstReliable && ` El historico fiable empieza el ${fmtDay(data.firstReliable)}.`}
+        </p>
+      ) : (
+        <p className="text-sm text-faint">Cargando...</p>
+      )}
+      <p className="mt-2 text-xs text-faint">
+        Cada noche se guarda una foto con precios en vivo. Reconstruir rellena hasta ayer los dias que faltan (o
+        salieron sin precios) volviendo a jugar tus operaciones con los cierres de cada dia: Stooq para bolsa,
+        CoinGecko para cripto. El efectivo de dias pasados sale del Equity Summary de IBKR si tu Flex Query lo
+        incluye; si no, se asume el saldo actual. Las fotos en vivo buenas nunca se tocan.
+      </p>
+      {running && (
+        <p className="mt-3 text-xs text-muted">Descargando cierres y el informe de IBKR. Puede tardar un par de minutos.</p>
+      )}
+      {error && <p className="mt-3 text-sm text-down">{error}</p>}
+      {report && (
+        <div className="mt-3 rounded-lg border border-border bg-bg p-3 text-xs text-muted">
+          <p>
+            {report.days === 0
+              ? "No habia nada que reconstruir."
+              : `${report.days} dias del ${fmtDay(report.from)} al ${fmtDay(report.to)}: ${report.written} escritos, ${report.kept} en vivo conservados.`}
+          </p>
+          <p className="mt-1">
+            Efectivo de dias pasados:{" "}
+            {report.cashSource === "ibkr"
+              ? "Equity Summary de IBKR."
+              : report.cashSource === "current"
+                ? "saldo actual, constante (activa 'Equity Summary in Base' en la Flex Query para el real)."
+                : "ninguno."}
+          </p>
+          {unpriced.length > 0 && (
+            <p className="mt-1">
+              Sin cierre algun dia (se uso el ultimo precio de operacion):{" "}
+              {unpriced.map(([s, n]) => `${s} (${n})`).join(", ")}.
+            </p>
+          )}
+          {report.errors.length > 0 && (
+            <p className="mt-1 text-warn">Errores: {report.errors.join(" · ")}</p>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 

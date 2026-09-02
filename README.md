@@ -99,7 +99,9 @@ Montarlo en Client Portal:
 1. **Performance & Reports** y luego **Flex Queries**.
 2. Crea una **Activity Flex Query** con al menos **Trades** y **Open
    Positions**. Anade **Cash Transactions** si quieres que entren los
-   dividendos. Formato XML.
+   dividendos, **Cash Report** para el saldo de efectivo y **Equity Summary
+   in Base by Report Date** para que la reconstruccion del historico use el
+   efectivo real de cada dia. Formato XML.
 3. Apunta el **Query ID**.
 4. En el engranaje de **Flex Web Service**, activalo y genera un token.
    **No le pongas restriccion por IP**: las funciones de Vercel no tienen IP
@@ -163,6 +165,7 @@ npm run test:intel     # motor de inteligencia, etapas puras
 npm run test:sources   # EDGAR, fundamentales, cripto, tesis, calibracion
 npm run test:managers  # inversores 13F, parseo y sync con EDGAR falso
 npm run test:period    # periodo de revision y metricas por periodo
+npm run test:history   # reconstruccion del historico (Stooq, CoinGecko, Equity Summary)
 npm run test:intel:db  # motor + tesis contra SQLite local
 ```
 
@@ -206,6 +209,27 @@ empiece antes se mide desde ese dia y lo dice en la tarjeta ("historico desde
 Bolsa/Cripto necesitan snapshots de esta version o posterior (guardan el
 realizado por lado); con snapshots viejos el resultado por lado no se muestra,
 el total si.
+
+### Historico reconstruido
+
+El cron nocturno solo guarda la foto si las posiciones que importan tienen
+precio (si no, reintenta tres veces y, si sigue sin precios, no guarda nada:
+mejor un hueco que una foto falsa). Los huecos, y todo lo anterior al primer
+snapshot, se rellenan desde **Ajustes → Historico de la cartera → Reconstruir
+historico** (`POST /api/history`, `src/lib/history.ts`): para cada dia hasta
+ayer se vuelve a jugar el libro de operaciones con el mismo motor de P&L y se
+valora con los cierres de ese dia, Stooq (CSV publico, sin clave) para
+acciones y ETF y CoinGecko para cripto (hasta 365 dias atras). Un dia sin
+cierre (fin de semana, festivo) usa el ultimo cierre anterior; un activo sin
+serie usa su ultimo precio de operacion y queda listado en el informe. El
+efectivo de dias pasados no esta en el libro (los ajustes de cuadre llevan la
+fecha del sync), asi que sale de la seccion **Equity Summary in Base** de la
+Flex Query de IBKR si la tienes activada (Client Portal → Performance &
+Reports → Flex Queries → editar la query → marcar "Equity Summary in Base by
+Report Date"); si no, se asume el saldo actual, constante. Nada de esto cambia
+el resultado (variacion del P&L): solo el valor y el capital aportado. Las
+fotos reconstruidas llevan `source = rebuilt` y se pueden regenerar cuantas
+veces se quiera; una foto en vivo fiable nunca se pisa.
 
 Los ajustes de cuadre que crea cada sync (saldo de efectivo, diferencias con
 Open Positions) entran al coste 1:1 o al coste real del broker, nunca como
@@ -291,6 +315,7 @@ src/
   lib/
     portfolio.ts  motor de P&L, con tests
     period.ts     periodo de revision (presets, comparacion, cookie) y period-metrics.ts (resultado por periodo)
+    history.ts    reconstruccion del historico con cierres diarios (market/stooq.ts, CoinGecko) y Equity Summary de IBKR
     market/       finnhub.ts, coingecko.ts y el router entre ambos
     sync.ts       enruta cada cuenta a su integracion
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
