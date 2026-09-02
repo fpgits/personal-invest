@@ -8,15 +8,20 @@ import {
   recentEvents,
   setEventFeedback,
 } from "@/lib/intel";
+import { periodBounds } from "@/lib/period";
 import { pendingProposalsByEvent } from "@/lib/thesis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const querySchema = z.object({
   min: z.enum(PRIORITIES).default("P4"),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  /** Periodo de revision (dias, ambos incluidos) por fecha del hecho. */
+  from: isoDay.optional(),
+  to: isoDay.optional(),
 });
 
 /** Feed de eventos y resultado de la ultima pasada (cron o manual). */
@@ -29,8 +34,10 @@ export const GET = protectedRoute(async (req) => {
       { status: 400 },
     );
   }
+  const { from, to } = parsed.data;
+  const window = from && to ? periodBounds({ from, to }) : {};
   const [events, run] = await Promise.all([
-    recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit }),
+    recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit, ...window }),
     lastRun(),
   ]);
   const proposals = await pendingProposalsByEvent(events.map((e) => e.id));

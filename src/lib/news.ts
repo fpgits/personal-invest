@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { desc, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { news, type Asset, type NewsRow } from "@/db/schema";
@@ -212,6 +212,17 @@ export async function newsLastError(): Promise<{ at: number; message: string } |
   }
 }
 
-export async function recentNews(limit = 50): Promise<NewsRow[]> {
-  return db.select().from(news).orderBy(desc(news.publishedAt)).limit(limit);
+export async function recentNews(
+  limit = 50,
+  window: { fromMs?: number; toMs?: number } = {},
+): Promise<NewsRow[]> {
+  const conds = [];
+  if (window.fromMs !== undefined) conds.push(gte(news.publishedAt, window.fromMs));
+  if (window.toMs !== undefined) conds.push(lte(news.publishedAt, window.toMs));
+  return db
+    .select()
+    .from(news)
+    .where(conds.length > 0 ? and(...conds) : undefined)
+    .orderBy(desc(news.publishedAt))
+    .limit(limit);
 }

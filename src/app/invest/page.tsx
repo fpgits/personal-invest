@@ -2,8 +2,10 @@ import Link from "next/link";
 import { RefreshCw } from "lucide-react";
 import { SetupNotice } from "@/components/setup-notice";
 import { Badge, EmptyState, PageTitle } from "@/components/ui";
+import { PeriodPicker } from "@/components/period-picker";
+import { dashboardPeriod } from "@/lib/period-metrics";
+import { readPeriod } from "@/lib/period-server";
 import { computePortfolio } from "@/lib/portfolio";
-import { history } from "@/lib/snapshot";
 import { missingRequired } from "@/lib/setup";
 import { fmtDateTime } from "@/lib/utils";
 import { DashboardView } from "./dashboard-view";
@@ -21,10 +23,7 @@ export default async function DashboardPage() {
     );
   }
 
-  const [portfolio, snaps] = await Promise.all([
-    computePortfolio(),
-    history(180).catch(() => []),
-  ]);
+  const [portfolio, { spec, period }] = await Promise.all([computePortfolio(), readPeriod()]);
 
   if (portfolio.positions.length === 0 && portfolio.closed.length === 0) {
     return (
@@ -50,11 +49,12 @@ export default async function DashboardPage() {
     );
   }
 
-  const chartData = snaps.map((s) => ({
-    date: s.date,
-    value: s.totalValue,
-    cost: s.costBasis,
-  }));
+  // El periodo se calcula con los snapshots; si falla, el Resumen sigue
+  // funcionando sin la parte de periodo.
+  const periodData = await dashboardPeriod(period, portfolio, spec.today).catch((e: unknown) => {
+    console.error("[resumen] periodo:", e instanceof Error ? e.message : String(e));
+    return null;
+  });
 
   const lastUpdate = Math.max(
     0,
@@ -68,12 +68,15 @@ export default async function DashboardPage() {
           lastUpdate > 0 ? `Precios de ${fmtDateTime(lastUpdate)}` : undefined
         }
         action={
-          portfolio.degraded ? (
-            <Badge tone="warn">
-              <RefreshCw size={11} className="mr-1" />
-              Algun precio desactualizado
-            </Badge>
-          ) : null
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {portfolio.degraded && (
+              <Badge tone="warn">
+                <RefreshCw size={11} className="mr-1" />
+                Algun precio desactualizado
+              </Badge>
+            )}
+            <PeriodPicker />
+          </div>
         }
       >
         Resumen
@@ -83,7 +86,7 @@ export default async function DashboardPage() {
         positions={portfolio.positions}
         closed={portfolio.closed}
         currency={portfolio.currency}
-        chartData={chartData}
+        period={periodData}
         slices={portfolio.byClass}
       />
     </>

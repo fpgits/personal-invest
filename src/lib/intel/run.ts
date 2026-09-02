@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assets,
@@ -408,16 +408,22 @@ export type EventWithSources = Omit<EventRow, "companies"> & {
 export async function recentEvents(opts: {
   minPriority?: Priority;
   limit?: number;
+  /** Ventana por fecha del hecho (occurredAt), en ms. */
+  fromMs?: number;
+  toMs?: number;
 } = {}): Promise<EventWithSources[]> {
   const limit = clampInt(opts.limit, 1, 200, 50);
   const allowed = PRIORITIES.slice(0, PRIORITIES.indexOf(opts.minPriority ?? "P4") + 1);
 
   // Lo ultimo detectado arriba: un hecho de hace dias que se acaba de
   // analizar es novedad para ti aunque el hecho sea viejo.
+  const conds = [inArray(events.priority, [...allowed])];
+  if (opts.fromMs !== undefined) conds.push(gte(events.occurredAt, opts.fromMs));
+  if (opts.toMs !== undefined) conds.push(lte(events.occurredAt, opts.toMs));
   const rows = await db
     .select()
     .from(events)
-    .where(inArray(events.priority, [...allowed]))
+    .where(and(...conds))
     .orderBy(desc(events.createdAt), desc(events.signalScore))
     .limit(limit);
   if (rows.length === 0) return [];

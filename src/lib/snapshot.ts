@@ -1,4 +1,4 @@
-import { asc, desc } from "drizzle-orm";
+import { and, asc, desc, gte, lt, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { snapshots, type Snapshot } from "@/db/schema";
 import { computePortfolio } from "./portfolio";
@@ -22,11 +22,16 @@ export async function takeSnapshot(): Promise<Snapshot> {
     breakdown: JSON.stringify({
       byClass: p.byClass,
       positions: p.positions.map((x) => ({
+        assetId: x.asset.id,
         symbol: x.asset.symbol,
+        assetClass: x.asset.assetClass,
+        group: x.group,
         value: x.value,
         quantity: x.quantity,
         price: x.price,
         weight: x.weight,
+        unrealizedPnl: x.unrealizedPnl,
+        realizedPnl: x.realizedPnl,
       })),
     }),
     createdAt: Date.now(),
@@ -56,6 +61,26 @@ export async function history(days = 365): Promise<Snapshot[]> {
     .orderBy(desc(snapshots.date))
     .limit(days);
   return rows.reverse();
+}
+
+/**
+ * Snapshots que necesita un periodo: los ultimos ANTERIORES a `from` (el
+ * cierre del dia previo es el punto de partida; se traen varios por si los
+ * mas recientes no son fiables) y todos hasta `to`.
+ */
+export async function snapshotsAround(from: string, to: string): Promise<Snapshot[]> {
+  const before = await db
+    .select()
+    .from(snapshots)
+    .where(lt(snapshots.date, from))
+    .orderBy(desc(snapshots.date))
+    .limit(10);
+  const inside = await db
+    .select()
+    .from(snapshots)
+    .where(and(gte(snapshots.date, from), lte(snapshots.date, to)))
+    .orderBy(asc(snapshots.date));
+  return [...before, ...inside];
 }
 
 export async function firstSnapshot(): Promise<Snapshot | null> {

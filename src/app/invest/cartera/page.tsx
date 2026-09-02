@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte, notLike, or, isNull } from "drizzle-orm";
 import { classColor } from "@/lib/colors";
 import {
   AssetIcon,
@@ -11,6 +11,9 @@ import {
 } from "@/components/ui";
 import { db } from "@/db";
 import { accounts, assets, transactions } from "@/db/schema";
+import { PeriodPicker } from "@/components/period-picker";
+import { periodBounds } from "@/lib/period";
+import { readPeriod } from "@/lib/period-server";
 import { computePortfolio, type Position } from "@/lib/portfolio";
 import { missingRequired } from "@/lib/setup";
 import { SetupNotice } from "@/components/setup-notice";
@@ -151,6 +154,8 @@ export default async function CarteraPage() {
     );
   }
 
+  const { period } = await readPeriod();
+  const { fromMs, toMs } = periodBounds(period);
   const [portfolio, txRows] = await Promise.all([
     computePortfolio(),
     db
@@ -158,8 +163,17 @@ export default async function CarteraPage() {
       .from(transactions)
       .innerJoin(assets, eq(transactions.assetId, assets.id))
       .innerJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(
+        and(
+          gte(transactions.executedAt, fromMs),
+          lte(transactions.executedAt, toMs),
+          // Los ajustes de cuadre (saldo de efectivo, Open Positions) se
+          // regeneran en cada sync con la fecha del sync: no son operaciones.
+          or(isNull(transactions.externalId), notLike(transactions.externalId, "%reconcile%")),
+        ),
+      )
       .orderBy(desc(transactions.executedAt))
-      .limit(60),
+      .limit(200),
   ]);
 
   return (
@@ -168,6 +182,7 @@ export default async function CarteraPage() {
         subtitle={`${portfolio.positions.length} posiciones abiertas · coste medio ${
           portfolio.currency
         }`}
+        action={<PeriodPicker />}
       >
         Cartera
       </PageTitle>
@@ -234,10 +249,15 @@ export default async function CarteraPage() {
 
       <Card className="mt-4" padded={false}>
         <div className="p-5 pb-3">
-          <CardTitle>Ultimas operaciones</CardTitle>
+          <CardTitle action={<span className="text-xs text-faint">{txRows.length} en el periodo</span>}>
+            Operaciones · {period.label}
+          </CardTitle>
         </div>
         {txRows.length === 0 ? (
-          <p className="px-5 pb-5 text-sm text-faint">Todavia no hay ninguna.</p>
+          <p className="px-5 pb-5 text-sm text-faint">
+            Ninguna operacion con fecha en este periodo. Cambia el periodo arriba. Los ajustes de
+            sincronizacion (saldo de efectivo, cuadre con el broker) no cuentan como operaciones.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">

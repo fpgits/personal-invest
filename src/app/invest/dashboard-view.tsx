@@ -3,15 +3,15 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import { AllocationBar, PortfolioChart, WeightBars } from "@/components/charts";
+import { AllocationBar, PortfolioChart, WeightBars, type ChartMode } from "@/components/charts";
 import { CLASS_LABELS, classColor } from "@/lib/colors";
 import { AssetIcon, Card, CardTitle, Delta, Stat } from "@/components/ui";
+import { fmtDay } from "@/lib/period";
+import type { DashboardPeriod, GroupKey, PeriodMetrics } from "@/lib/period-metrics";
 import type { ClassBreakdown, Position } from "@/lib/portfolio";
-import { fmtMoney, fmtQty } from "@/lib/utils";
+import { fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
 
-type ChartPoint = { date: string; value: number; cost: number };
-
-type Group = { key: string; label: string; classes: string[] | null };
+type Group = { key: GroupKey; label: string; classes: string[] | null };
 
 // "Bolsa" agrupa acciones, ETFs y el efectivo del broker. "Cripto" agrupa
 // cripto y el efectivo del exchange. El efectivo cuenta en su lado (p.group),
@@ -24,20 +24,46 @@ const GROUPS: Group[] = [
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
+/** Texto de apoyo de la tarjeta de resultado: comparacion y limites del historico. */
+function periodHint(
+  m: PeriodMetrics | null,
+  cmp: PeriodMetrics | null,
+  cmpLabel: string | null,
+  currency: string,
+): string | undefined {
+  if (!m || m.result === null) return "Sin historico suficiente: el snapshot corre cada noche";
+  const parts: string[] = [];
+  if (cmpLabel) {
+    if (cmp && cmp.result !== null) {
+      parts.push(
+        `vs ${cmpLabel}: ${cmp.resultPct !== null ? fmtPct(cmp.resultPct) : ""} (${fmtMoney(cmp.result, currency)})`.replace(":  (", ": ("),
+      );
+    } else {
+      parts.push(`Sin historico para ${cmpLabel}`);
+    }
+  }
+  if (m.partial && m.start) parts.push(`historico desde ${fmtDay(m.start.date, false)}`);
+  if (m.end && !m.end.live && m.end.date < m.to) parts.push(`hasta ${fmtDay(m.end.date, false)}`);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
 export function DashboardView({
   positions,
   closed,
   currency,
-  chartData,
+  period,
   slices,
 }: {
   positions: Position[];
   closed: Position[];
   currency: string;
-  chartData: ChartPoint[];
+  period: DashboardPeriod | null;
   slices: ClassBreakdown[];
 }) {
-  const [sel, setSel] = useState("all");
+  const [sel, setSel] = useState<GroupKey>("all");
+  // El grafico enseña por defecto el RESULTADO: lo que gano o perdio lo
+  // invertido. El valor total sube con cada deposito y eso no es rentabilidad.
+  const [chartMode, setChartMode] = useState<ChartMode>("result");
 
   // Solo mostramos las pestanas de clases que existen en la cartera.
   const tabs = useMemo(
@@ -97,10 +123,28 @@ export function DashboardView({
       color: classColor(p.asset.assetClass),
     }));
 
-  const movers = view.fpos
-    .slice()
-    .sort((a, b) => b.unrealizedPct - a.unrealizedPct)
-    .filter((_, i, arr) => i < 3 || i >= arr.length - 3);
+  // Periodo: resultado del grupo elegido y su comparacion.
+  const metrics = period?.groups[group.key] ?? null;
+  const cmp = period?.comparison?.[group.key] ?? null;
+  const periodLabel = period?.period.label ?? "Periodo";
+  const chartData = metrics?.chart ?? [];
+
+  // Mejores y peores del periodo (variacion de precio); si no hay historico
+  // para el rango, cae a la variacion desde la compra.
+  const periodMovers = (metrics?.movers ?? []).filter((m) => !group.classes || group.classes.includes(m.group));
+  const moversByPeriod = periodMovers.length > 0;
+  const movers = moversByPeriod
+    ? periodMovers
+        .map((m) => {
+          const pos = view.fpos.find((p) => p.asset.id === m.assetId);
+          return { key: m.assetId, symbol: m.symbol, logoUrl: m.logoUrl ?? pos?.asset.logoUrl ?? null, quantity: m.quantity, price: m.price, value: m.change, pct: m.changePct };
+        })
+        .filter((_, i, arr) => i < 3 || i >= arr.length - 3)
+    : view.fpos
+        .slice()
+        .sort((a, b) => b.unrealizedPct - a.unrealizedPct)
+        .filter((_, i, arr) => i < 3 || i >= arr.length - 3)
+        .map((p) => ({ key: p.asset.id, symbol: p.asset.symbol, logoUrl: p.asset.logoUrl, quantity: p.quantity, price: p.price, value: p.unrealizedPnl, pct: p.unrealizedPct }));
 
   return (
     <>
@@ -144,12 +188,23 @@ export function DashboardView({
           deltaPct={view.unrealizedPct}
           currency={currency}
         />
-        <Stat
-          label="Hoy"
-          value={view.dayChange}
-          deltaPct={view.dayChangePct}
-          currency={currency}
-        />
+        {metrics && metrics.result !== null ? (
+          <Stat
+            label={`Resultado · ${periodLabel}`}
+            value={metrics.result}
+            deltaPct={metrics.resultPct ?? undefined}
+            currency={currency}
+            hint={periodHint(metrics, cmp, period?.period.cmpLabel ?? null, currency)}
+          />
+        ) : (
+          <Stat
+            label={`Resultado · ${periodLabel}`}
+            value={view.dayChange}
+            deltaPct={view.dayChangePct}
+            currency={currency}
+            hint={`Sin historico para el periodo: se muestra hoy. ${period?.firstSnapshotDate ? `Snapshots desde ${fmtDay(period.firstSnapshotDate, false)}.` : "El snapshot corre cada noche."}`}
+          />
+        )}
         <Stat
           label="P&L realizado"
           value={view.realizedPnl}
@@ -167,14 +222,39 @@ export function DashboardView({
           <Card className="lg:col-span-2">
             <CardTitle
               action={
-                <span className="text-xs text-faint">
-                  Linea continua: valor. Discontinua: coste.
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="hidden text-xs text-faint lg:inline">
+                    {chartMode === "result"
+                      ? "Sin depositos ni retiros: solo lo que gano o perdio lo invertido."
+                      : "Continua: valor total. Discontinua: capital aportado."}
+                  </span>
+                  <div className="inline-flex rounded-md border border-border p-0.5" role="tablist" aria-label="Lectura del grafico">
+                    {(
+                      [
+                        ["result", "Resultado"],
+                        ["value", "Valor"],
+                      ] as Array<[ChartMode, string]>
+                    ).map(([m, label]) => (
+                      <button
+                        key={m}
+                        type="button"
+                        role="tab"
+                        aria-selected={chartMode === m}
+                        onClick={() => setChartMode(m)}
+                        className={`rounded px-2 py-0.5 text-xs transition ${
+                          chartMode === m ? "bg-surface-2 text-text" : "text-muted hover:text-text"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               }
             >
-              Evolucion de la cartera
+              {chartMode === "result" ? "Resultado" : "Valor"} · {periodLabel}
             </CardTitle>
-            <PortfolioChart data={chartData} currency={currency} />
+            <PortfolioChart data={chartData} currency={currency} mode={chartMode} />
           </Card>
 
           <Card>
@@ -216,31 +296,39 @@ export function DashboardView({
 
         <Card padded={false}>
           <div className="p-5 pb-3">
-            <CardTitle>Mejores y peores</CardTitle>
+            <CardTitle
+              action={
+                <span className="text-xs text-faint">
+                  {moversByPeriod ? `Precio en ${periodLabel.toLowerCase()}` : "Desde la compra"}
+                </span>
+              }
+            >
+              Mejores y peores
+            </CardTitle>
           </div>
           {movers.length > 0 ? (
             <div className="divide-y divide-border">
               {movers.map((p) => (
                 <div
-                  key={p.asset.id}
+                  key={p.key}
                   className="flex items-center gap-3 px-5 py-2.5"
                 >
                   <AssetIcon
-                    symbol={p.asset.symbol}
-                    logoUrl={p.asset.logoUrl}
+                    symbol={p.symbol}
+                    logoUrl={p.logoUrl}
                     size={26}
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
-                      {p.asset.symbol}
+                      {p.symbol}
                     </p>
                     <p className="tnum truncate text-xs text-faint">
                       {fmtQty(p.quantity)} · {fmtMoney(p.price, currency)}
                     </p>
                   </div>
                   <Delta
-                    value={p.unrealizedPnl}
-                    pct={p.unrealizedPct}
+                    value={p.value}
+                    pct={p.pct}
                     currency={currency}
                     className="text-sm"
                   />

@@ -1,15 +1,22 @@
 import { protectedRoute } from "@/lib/api";
 import { ingestFilings } from "@/lib/edgar";
 import { ingestNews, newsLastError, processNews, recentNews } from "@/lib/news";
+import { periodBounds } from "@/lib/period";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 export const GET = protectedRoute(async (req) => {
-  const limit = Number(new URL(req.url).searchParams.get("limit") ?? 50);
+  const params = new URL(req.url).searchParams;
+  const limit = Number(params.get("limit") ?? 50);
   const safe = Number.isFinite(limit) ? Math.min(Math.max(1, Math.trunc(limit)), 200) : 50;
-  const [items, lastError] = await Promise.all([recentNews(safe), newsLastError()]);
+  const from = params.get("from");
+  const to = params.get("to");
+  const window = from && to && ISO_DAY.test(from) && ISO_DAY.test(to) ? periodBounds({ from, to }) : {};
+  const [items, lastError] = await Promise.all([recentNews(safe, window), newsLastError()]);
   return Response.json({ news: items, lastError });
 });
 

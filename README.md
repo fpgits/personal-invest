@@ -161,8 +161,52 @@ npm run test:pnl
 npm run test:ibkr
 npm run test:intel     # motor de inteligencia, etapas puras
 npm run test:sources   # EDGAR, fundamentales, cripto, tesis, calibracion
+npm run test:managers  # inversores 13F, parseo y sync con EDGAR falso
+npm run test:period    # periodo de revision y metricas por periodo
 npm run test:intel:db  # motor + tesis contra SQLite local
 ```
+
+## Periodo de revision
+
+Arriba a la derecha de Resumen, Cartera, Alertas y Noticias hay un selector de
+periodo, el mismo en todas: presets (hoy, 7/30/90 dias, 6/12 meses, mes,
+trimestre y ano en curso) o un rango a mano en el calendario, y un rango de
+comparacion (periodo anterior, ano anterior, ano anterior por dia de la
+semana, o uno a mano). La eleccion se guarda en una cookie (`invest_period`)
+con las fechas ya resueltas por el navegador, asi que vale para todas las
+paginas y sobrevive al recargar; el servidor solo la lee
+(`src/lib/period.ts` es la logica pura, `src/lib/period-server.ts` la
+cookie).
+
+Que cambia con el periodo:
+
+- **Resumen**: la tarjeta *Resultado* pasa a ser la del periodo:
+  `P&L al final − P&L al inicio`, con P&L = no realizado + realizado +
+  dividendos acumulados, asi que **un deposito sube el valor pero no el
+  resultado**. El inicio es el cierre del dia anterior al periodo; el final es
+  el ultimo cierre, o los precios en vivo si el periodo llega a hoy. Debajo,
+  la comparacion ("vs 5 jul–3 ago: +1.7%"). El grafico tiene dos lecturas:
+  *Resultado* (por defecto: lo que gano o perdio lo invertido desde el inicio
+  del periodo, arranca en 0) y *Valor* (valor total con el capital aportado en
+  discontinua; capital aportado = valor − P&L total, sube con un deposito y
+  no con una subida). *Mejores y peores* pasa a ser la variacion de precio en
+  el periodo.
+- **Cartera**: la lista de operaciones se filtra al periodo.
+- **Alertas** y **Noticias**: se filtran por fecha del hecho / de publicacion.
+
+Todo sale de los snapshots diarios (`/api/cron/snapshot`), asi que el
+historico empieza el dia del primer snapshot **fiable**: las fotos vacias
+(cuenta recien creada) o con precios a 0 (proveedor caido) se ignoran, porque
+compararse con ellas presentaria depositos como ganancia. Un periodo que
+empiece antes se mide desde ese dia y lo dice en la tarjeta ("historico desde
+1 sept"); una comparacion sin snapshots dice "sin historico". Las pestanas
+Bolsa/Cripto necesitan snapshots de esta version o posterior (guardan el
+realizado por lado); con snapshots viejos el resultado por lado no se muestra,
+el total si.
+
+Los ajustes de cuadre que crea cada sync (saldo de efectivo, diferencias con
+Open Positions) entran al coste 1:1 o al coste real del broker, nunca como
+ganancia, y no aparecen en la lista de operaciones.
 
 ## Deploy
 
@@ -243,6 +287,7 @@ src/
   db/             schema.ts (22 tablas) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
+    period.ts     periodo de revision (presets, comparacion, cookie) y period-metrics.ts (resultado por periodo)
     market/       finnhub.ts, coingecko.ts y el router entre ambos
     sync.ts       enruta cada cuenta a su integracion
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)

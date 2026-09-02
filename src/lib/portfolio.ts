@@ -48,6 +48,9 @@ export type ClassBreakdown = {
   value: number;
   weight: number;
   unrealizedPnl: number;
+  /** Incluye las posiciones ya cerradas de ese lado. */
+  realizedPnl: number;
+  dividends: number;
 };
 
 export type PortfolioSummary = {
@@ -337,12 +340,22 @@ export async function buildSummary(
 
   // Reparto por "lado": el efectivo ya viene atribuido a bolsa o cripto via
   // p.group, asi que no aparece como una clase separada.
-  const classMap = new Map<string, { value: number; pnl: number }>();
+  const classMap = new Map<string, { value: number; pnl: number; realized: number; dividends: number }>();
   for (const p of open) {
     const k = p.group;
-    const cur = classMap.get(k) ?? { value: 0, pnl: 0 };
+    const cur = classMap.get(k) ?? { value: 0, pnl: 0, realized: 0, dividends: 0 };
     cur.value += p.value;
     cur.pnl += p.unrealizedPnl;
+    cur.realized += p.realizedPnl;
+    cur.dividends += p.dividends;
+    classMap.set(k, cur);
+  }
+  // Lo realizado en posiciones ya cerradas tambien es de su lado.
+  for (const p of closed) {
+    const k = p.group;
+    const cur = classMap.get(k) ?? { value: 0, pnl: 0, realized: 0, dividends: 0 };
+    cur.realized += p.realizedPnl;
+    cur.dividends += p.dividends;
     classMap.set(k, cur);
   }
 
@@ -368,6 +381,8 @@ export async function buildSummary(
         value: v.value,
         weight: totalValue > EPS ? (v.value / totalValue) * 100 : 0,
         unrealizedPnl: v.pnl,
+        realizedPnl: v.realized,
+        dividends: v.dividends,
       }))
       .sort((a, b) => b.value - a.value),
     degraded: open.some((p) => p.priceStale),

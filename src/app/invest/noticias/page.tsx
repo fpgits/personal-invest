@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
+import { PeriodPicker, usePeriod } from "@/components/period-picker";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
 import type { NewsRow } from "@/db/schema";
 import { api, fmtDateTime } from "@/lib/utils";
@@ -16,18 +17,19 @@ const SENTIMENT: Record<string, { label: string; tone: "up" | "down" | "neutral"
 };
 
 export default function NoticiasPage() {
+  const { period } = usePeriod();
   const { data, mutate, isLoading } = useSWR<{
     news: NewsRow[];
     lastError?: { at: number; message: string } | null;
-  }>(api("/api/news"), fetcher);
+  }>(api(`/api/news?from=${period.from}&to=${period.to}`), fetcher);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<"all" | "high">("all");
 
   async function refresh() {
     setRefreshing(true);
-    const res = await fetch(api("/api/news"), { method: "POST" });
-    const json = await res.json();
-    mutate(json, false);
+    await fetch(api("/api/news"), { method: "POST" });
+    // El POST devuelve las ultimas 50 sin filtro de periodo: se relee con el.
+    await mutate();
     setRefreshing(false);
   }
 
@@ -39,14 +41,17 @@ export default function NoticiasPage() {
       <PageTitle
         subtitle="Titulares de tus activos, resumidos y clasificados por IA"
         action={
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-sm transition hover:border-border-strong disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-            {refreshing ? "Actualizando..." : "Actualizar"}
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <PeriodPicker />
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-sm transition hover:border-border-strong disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+              {refreshing ? "Actualizando..." : "Actualizar"}
+            </button>
+          </div>
         }
       >
         Noticias
@@ -86,9 +91,9 @@ export default function NoticiasPage() {
           ))}
         </div>
       ) : news.length === 0 ? (
-        <EmptyState title="Sin noticias todavia">
-          Dale a Actualizar. Se buscan titulares de los activos que tengas en
-          cartera o en la watchlist.
+        <EmptyState title={`Sin noticias en ${period.label.toLowerCase()}`}>
+          Cambia el periodo arriba o dale a Actualizar. Se buscan titulares de
+          los activos que tengas en cartera o en la watchlist.
         </EmptyState>
       ) : (
         <ul className="space-y-3">

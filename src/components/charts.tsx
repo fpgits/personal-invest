@@ -4,6 +4,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,32 +18,66 @@ import { cn, fmtMoney } from "@/lib/utils";
 const AXIS = "#8b94a3";
 const GRID = "#232830";
 
-type Point = { date: string; value: number; cost: number };
+type Point = {
+  date: string;
+  value: number;
+  /** Resultado acumulado desde el inicio del periodo. */
+  result: number | null;
+  /** Capital propio (valor − P&L total): sube con un deposito, no con una subida. */
+  capital: number | null;
+};
 
+export type ChartMode = "result" | "value";
+
+const UP = "#26c281";
+const DOWN = "#f4595b";
+const ACCENT = "#3987e5";
+
+const tooltipStyle = {
+  background: "#181c23",
+  border: "1px solid #2f3641",
+  borderRadius: 10,
+  fontSize: 12,
+} as const;
+
+/**
+ * Evolucion de la cartera en dos lecturas:
+ * - result: lo que gano o perdio lo invertido desde el inicio del periodo.
+ *   Un deposito no lo mueve. Es la lectura por defecto.
+ * - value: el valor total con el capital aportado en discontinua; la
+ *   distancia entre ambas es el resultado acumulado.
+ */
 export function PortfolioChart({
   data,
   currency = "USD",
+  mode = "result",
 }: {
   data: Point[];
   currency?: string;
+  mode?: ChartMode;
 }) {
-  if (data.length < 2) {
+  const usable = mode === "result" ? data.filter((p) => p.result !== null) : data;
+  if (usable.length < 2) {
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-faint">
-        Hace falta al menos un par de dias de historico. El snapshot corre cada
-        noche.
+      <div className="flex h-64 items-center justify-center px-6 text-center text-sm text-faint">
+        Hace falta al menos un par de cierres fiables en el periodo. El snapshot corre cada noche.
       </div>
     );
   }
 
+  const last = usable[usable.length - 1];
+  const resultColor = (last.result ?? 0) >= 0 ? UP : DOWN;
+  const lineColor = mode === "result" ? resultColor : ACCENT;
+  const gradientId = mode === "result" ? "resultFill" : "valueFill";
+
   return (
     <div className="h-64 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <AreaChart data={usable} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
-            <linearGradient id="valueFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3987e5" stopOpacity={0.28} />
-              <stop offset="100%" stopColor="#3987e5" stopOpacity={0} />
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={lineColor} stopOpacity={0.28} />
+              <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
             </linearGradient>
           </defs>
 
@@ -59,42 +94,55 @@ export function PortfolioChart({
             tick={{ fill: AXIS, fontSize: 11 }}
             tickLine={false}
             axisLine={false}
-            width={64}
+            width={76}
             tickFormatter={(v: number) => fmtMoney(v, currency, true)}
           />
           <Tooltip
             cursor={{ stroke: AXIS, strokeDasharray: "3 3" }}
-            contentStyle={{
-              background: "#181c23",
-              border: "1px solid #2f3641",
-              borderRadius: 10,
-              fontSize: 12,
-            }}
+            contentStyle={tooltipStyle}
             labelStyle={{ color: AXIS, marginBottom: 4 }}
             formatter={(value, name) => [
               fmtMoney(Number(value ?? 0), currency),
-              name === "value" ? "Valor" : "Coste",
+              name === "value" ? "Valor" : name === "capital" ? "Capital aportado" : "Resultado",
             ]}
           />
-          {/* Coste primero: queda por debajo y el area de valor lo cubre. */}
-          <Area
-            type="monotone"
-            dataKey="cost"
-            stroke="#5c6473"
-            strokeWidth={1}
-            strokeDasharray="4 4"
-            fill="none"
-            dot={false}
-          />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="#3987e5"
-            strokeWidth={2}
-            fill="url(#valueFill)"
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 2, stroke: "#12151a" }}
-          />
+          {mode === "result" ? (
+            <>
+              <ReferenceLine y={0} stroke="#5c6473" strokeDasharray="4 4" />
+              <Area
+                type="monotone"
+                dataKey="result"
+                stroke={resultColor}
+                strokeWidth={2}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                activeDot={{ r: 4, strokeWidth: 2, stroke: "#12151a" }}
+              />
+            </>
+          ) : (
+            <>
+              {/* Capital primero: queda por debajo y el area de valor lo cubre. */}
+              <Area
+                type="monotone"
+                dataKey="capital"
+                stroke="#5c6473"
+                strokeWidth={1}
+                strokeDasharray="4 4"
+                fill="none"
+                dot={false}
+                connectNulls
+              />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke={ACCENT}
+                strokeWidth={2}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                activeDot={{ r: 4, strokeWidth: 2, stroke: "#12151a" }}
+              />
+            </>
+          )}
         </AreaChart>
       </ResponsiveContainer>
     </div>

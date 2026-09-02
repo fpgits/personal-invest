@@ -4,6 +4,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { useState } from "react";
 import { ExternalLink, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { PeriodPicker, usePeriod } from "@/components/period-picker";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
 import type { CalibrationReport } from "@/lib/intel/calibration";
 import type { EventWithSources, RunStats } from "@/lib/intel/run";
@@ -74,11 +75,12 @@ const FEEDBACK: Array<{ id: Feedback; label: string }> = [
 
 export default function AlertasPage() {
   const [filter, setFilter] = useState<Filter>("signals");
+  const { period } = usePeriod();
   const min = FILTERS.find((f) => f.id === filter)!.min;
   const { data, error, mutate, isLoading } = useSWR<{
     events: Array<EventWithSources & { proposalId: string | null }>;
     lastRun: RunStats | null;
-  }>(api(`/api/events?min=${min}`), fetcher);
+  }>(api(`/api/events?min=${min}&from=${period.from}&to=${period.to}`), fetcher);
   const [showCalibration, setShowCalibration] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -118,14 +120,17 @@ export default function AlertasPage() {
       <PageTitle
         subtitle="Hechos que pueden mover una tesis. Hecho, inferencia y evaluacion, por separado y con fuentes."
         action={
-          <button
-            onClick={runNow}
-            disabled={running}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-sm transition hover:border-border-strong disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={running ? "animate-spin" : ""} />
-            {running ? "Analizando..." : "Analizar ahora"}
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <PeriodPicker />
+            <button
+              onClick={runNow}
+              disabled={running}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-sm transition hover:border-border-strong disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={running ? "animate-spin" : ""} />
+              {running ? "Analizando..." : "Analizar ahora"}
+            </button>
+          </div>
         }
       >
         Alertas
@@ -196,10 +201,10 @@ export default function AlertasPage() {
           ))}
         </div>
       ) : list.length === 0 ? (
-        <EmptyState title="Nada que merezca una alerta">
+        <EmptyState title={`Nada que merezca una alerta en ${period.label.toLowerCase()}`}>
           {filter === "signals"
-            ? "No hay eventos P1-P3. El motor corre solo cada 4 horas sobre las noticias de tus activos; tambien puedes lanzarlo ahora."
-            : "Todavia no se ha analizado ninguna noticia. Dale a Analizar ahora."}
+            ? "No hay eventos P1-P3 con fecha en este periodo. Cambia el periodo arriba, o lanza el motor: corre solo cada 4 horas sobre las noticias de tus activos."
+            : "No hay eventos con fecha en este periodo. Cambia el periodo arriba o dale a Analizar ahora."}
         </EmptyState>
       ) : (
         <ul className="space-y-3">
