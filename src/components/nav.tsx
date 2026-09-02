@@ -49,6 +49,10 @@ export function Nav() {
       <Link
         key={href}
         href={href}
+        // Todas las paginas son dinamicas y van detras del login: prefetch
+        // solo servia para disparar nueve renders del servidor por cada
+        // refresco. loading.tsx da la respuesta inmediata al navegar.
+        prefetch={false}
         onClick={() => setOpen(false)}
         className={cn(
           "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition",

@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -18,6 +19,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Loader2,
 } from "lucide-react";
 import {
   addDays,
@@ -48,6 +50,8 @@ type Ctx = {
   spec: PeriodSpec;
   period: ResolvedPeriod;
   today: string;
+  /** true mientras el servidor vuelve a renderizar con el periodo nuevo. */
+  pending: boolean;
   setSpec: (next: PeriodSpec) => void;
 };
 
@@ -76,6 +80,7 @@ export function PeriodProvider({
   const router = useRouter();
   const [spec, setSpecState] = useState<PeriodSpec>(initial);
   const [today, setToday] = useState(initial.today ?? serverToday);
+  const [pending, startTransition] = useTransition();
   const period = useMemo(() => resolveStored(spec, today), [spec, today]);
 
   // Tras montar manda el dia del navegador. Si la cookie es de otro dia (o de
@@ -83,13 +88,16 @@ export function PeriodProvider({
   useEffect(() => {
     const id = window.setTimeout(() => {
       const t = todayLocal();
-      const stale = spec.preset !== "custom" ? spec.to !== t : false;
+      // Un preset guardado ayer (o en otra zona horaria) ya no cubre las
+      // fechas que le tocan hoy: se recalcula. "Ayer" termina ayer y es normal.
+      const fresh = resolvePeriod(spec, t);
+      const stale = spec.preset !== "custom" && (spec.from !== fresh.from || spec.to !== fresh.to);
       if (t === today && spec.today === t && !stale) return;
       const next = withDates(spec, t);
       setToday(t);
       setSpecState(next);
       writeCookie(next);
-      if (stale || spec.today !== t) router.refresh();
+      if (stale || spec.today !== t) startTransition(() => router.refresh());
     }, 0);
     return () => window.clearTimeout(id);
     // Solo al montar.
@@ -103,12 +111,17 @@ export function PeriodProvider({
       setToday(t);
       setSpecState(full);
       writeCookie(full);
-      router.refresh();
+      // En transicion: las paginas de servidor (Cartera) se vuelven a
+      // renderizar con la cookie nueva y `pending` lo cuenta mientras tanto.
+      startTransition(() => router.refresh());
     },
     [router],
   );
 
-  const value = useMemo(() => ({ spec, period, today, setSpec }), [spec, period, today, setSpec]);
+  const value = useMemo(
+    () => ({ spec, period, today, pending, setSpec }),
+    [spec, period, today, pending, setSpec],
+  );
   return <PeriodContext.Provider value={value}>{children}</PeriodContext.Provider>;
 }
 
@@ -122,7 +135,7 @@ export function usePeriod(): Ctx {
 // Selector
 
 export function PeriodPicker({ className }: { className?: string }) {
-  const { spec, period, today, setSpec } = usePeriod();
+  const { spec, period, today, pending, setSpec } = usePeriod();
   const [open, setOpen] = useState<null | "range" | "cmp">(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -148,7 +161,7 @@ export function PeriodPicker({ className }: { className?: string }) {
   return (
     <div ref={ref} className={cn("relative inline-flex rounded-lg border border-border bg-surface p-1", className)}>
       <button type="button" onClick={() => setOpen(open === "range" ? null : "range")} className={pill} aria-expanded={open === "range"}>
-        <Calendar size={14} className="text-muted" />
+        {pending ? <Loader2 size={14} className="animate-spin text-accent" /> : <Calendar size={14} className="text-muted" />}
         <span>{period.label}</span>
         {period.preset !== "custom" && (
           <span className="hidden text-xs text-faint sm:inline">{fmtRange(period.from, period.to)}</span>

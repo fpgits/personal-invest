@@ -86,7 +86,8 @@ export default async function DashboardPage() {
         positions={portfolio.positions}
         closed={portfolio.closed}
         currency={portfolio.currency}
-        period={periodData}
+        initialPeriod={periodData}
+        initialSpec={spec}
         slices={portfolio.byClass}
       />
     </>

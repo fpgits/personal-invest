@@ -2,14 +2,22 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import useSWR from "swr";
 import { ArrowUpRight } from "lucide-react";
 import { AllocationBar, PortfolioChart, WeightBars, type ChartMode } from "@/components/charts";
 import { CLASS_LABELS, classColor } from "@/lib/colors";
 import { AssetIcon, Card, CardTitle, Delta, Stat } from "@/components/ui";
-import { fmtDay } from "@/lib/period";
+import { usePeriod } from "@/components/period-picker";
+import { fmtDay, serializeSpec, type PeriodSpec } from "@/lib/period";
 import type { DashboardPeriod, GroupKey, PeriodMetrics } from "@/lib/period-metrics";
 import type { ClassBreakdown, Position } from "@/lib/portfolio";
-import { fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
+import { api, cn, fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
+
+const fetcher = (url: string) => fetch(url).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
+
+function periodKey(spec: PeriodSpec): string {
+  return api(`/api/portfolio/period?spec=${encodeURIComponent(serializeSpec(spec))}`);
+}
 
 type Group = { key: GroupKey; label: string; classes: string[] | null };
 
@@ -51,16 +59,38 @@ export function DashboardView({
   positions,
   closed,
   currency,
-  period,
+  initialPeriod,
+  initialSpec,
   slices,
 }: {
   positions: Position[];
   closed: Position[];
   currency: string;
-  period: DashboardPeriod | null;
+  /** Metricas calculadas en el servidor con la cookie del momento de cargar. */
+  initialPeriod: DashboardPeriod | null;
+  initialSpec: PeriodSpec;
   slices: ClassBreakdown[];
 }) {
   const [sel, setSel] = useState<GroupKey>("all");
+
+  // Las metricas del periodo van por SWR con una clave que ES el periodo
+  // elegido: lo que se ve corresponde siempre a lo que marca el selector, y
+  // mientras llega lo nuevo se ve un esqueleto, nunca cifras de otro periodo.
+  // La respuesta del servidor con la que cargo la pagina sirve de semilla
+  // para su propia clave (sin peticion extra).
+  const { spec, period: selected, pending } = usePeriod();
+  const key = periodKey(spec);
+  const seedKey = periodKey(initialSpec);
+  const { data: fetched, isLoading, error } = useSWR<DashboardPeriod>(key, fetcher, {
+    fallback: initialPeriod ? { [seedKey]: initialPeriod } : {},
+    // Con semilla no hace falta volver a pedir al montar; al cambiar la clave
+    // no hay datos y se pide igual.
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    keepPreviousData: false,
+  });
+  const period = fetched ?? null;
+  const loadingPeriod = isLoading || (pending && !period);
   // El grafico enseña por defecto el RESULTADO: lo que gano o perdio lo
   // invertido. El valor total sube con cada deposito y eso no es rentabilidad.
   const [chartMode, setChartMode] = useState<ChartMode>("result");
@@ -126,7 +156,9 @@ export function DashboardView({
   // Periodo: resultado del grupo elegido y su comparacion.
   const metrics = period?.groups[group.key] ?? null;
   const cmp = period?.comparison?.[group.key] ?? null;
-  const periodLabel = period?.period.label ?? "Periodo";
+  // La etiqueta sale del selector (instantanea); las cifras, de los datos.
+  const periodLabel = selected.label;
+  const cmpLabel = selected.cmpLabel;
   const chartData = metrics?.chart ?? [];
 
   // Mejores y peores del periodo (variacion de precio); si no hay historico
@@ -188,13 +220,24 @@ export function DashboardView({
           deltaPct={view.unrealizedPct}
           currency={currency}
         />
-        {metrics && metrics.result !== null ? (
+        {loadingPeriod ? (
+          <Card className="pulse-soft">
+            <p className="text-xs font-medium uppercase tracking-wide text-faint">Resultado · {periodLabel}</p>
+            <p className="mt-2 text-2xl font-semibold text-faint">…</p>
+            <p className="mt-1 text-xs text-faint">Calculando</p>
+          </Card>
+        ) : error ? (
+          <Card>
+            <p className="text-xs font-medium uppercase tracking-wide text-faint">Resultado · {periodLabel}</p>
+            <p className="mt-2 text-sm text-down">No se pudo calcular el periodo. Recarga la pagina.</p>
+          </Card>
+        ) : metrics && metrics.result !== null ? (
           <Stat
             label={`Resultado · ${periodLabel}`}
             value={metrics.result}
             deltaPct={metrics.resultPct ?? undefined}
             currency={currency}
-            hint={periodHint(metrics, cmp, period?.period.cmpLabel ?? null, currency)}
+            hint={periodHint(metrics, cmp, cmpLabel, currency)}
           />
         ) : (
           <Stat
@@ -219,7 +262,7 @@ export function DashboardView({
 
       {isAll && (
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
+          <Card className={cn("lg:col-span-2", loadingPeriod && "opacity-60")}>
             <CardTitle
               action={
                 <div className="flex items-center gap-3">
@@ -279,6 +322,7 @@ export function DashboardView({
             action={
               <Link
                 href="/invest/cartera"
+                prefetch={false}
                 className="flex items-center gap-1 text-xs text-accent hover:underline"
               >
                 Ver todo <ArrowUpRight size={12} />
@@ -294,7 +338,7 @@ export function DashboardView({
           )}
         </Card>
 
-        <Card padded={false}>
+        <Card padded={false} className={cn(loadingPeriod && "opacity-60")}>
           <div className="p-5 pb-3">
             <CardTitle
               action={

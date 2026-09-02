@@ -176,7 +176,10 @@ semana, o uno a mano). La eleccion se guarda en una cookie (`invest_period`)
 con las fechas ya resueltas por el navegador, asi que vale para todas las
 paginas y sobrevive al recargar; el servidor solo la lee
 (`src/lib/period.ts` es la logica pura, `src/lib/period-server.ts` la
-cookie).
+cookie). En Resumen las metricas del periodo se piden a
+`/api/portfolio/period` con el periodo elegido como clave (SWR), asi que lo
+que se ve corresponde siempre al selector y mientras llega se ve un
+esqueleto; el resto de paginas se vuelven a renderizar con la cookie nueva.
 
 Que cambia con el periodo:
 
