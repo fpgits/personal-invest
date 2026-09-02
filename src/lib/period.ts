@@ -13,6 +13,7 @@
 
 export const PRESETS = [
   { id: "1d", label: "Hoy" },
+  { id: "yd", label: "Ayer" },
   { id: "7d", label: "Ultimos 7 dias" },
   { id: "30d", label: "Ultimos 30 dias" },
   { id: "90d", label: "Ultimos 90 dias" },
@@ -151,6 +152,10 @@ function presetRange(preset: PresetId, today: string): { from: string; to: strin
   switch (preset) {
     case "1d":
       return { from: today, to: today };
+    case "yd": {
+      const y = addDays(today, -1);
+      return { from: y, to: y };
+    }
     case "7d":
       return { from: addDays(today, -6), to: today };
     case "30d":

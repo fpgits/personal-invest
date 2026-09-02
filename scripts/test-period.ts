@@ -76,6 +76,8 @@ eq(r30.label, "Ultimos 30 dias", "etiqueta del preset");
 eq(r30.cmpLabel, "5 jul–3 ago 2026", "etiqueta de la comparacion");
 const r1 = resolvePeriod({ preset: "1d", comparison: "prev" }, T);
 eq([r1.from, r1.to, r1.cmpFrom, r1.cmpTo], [T, T, "2026-09-01", "2026-09-01"], "hoy vs ayer");
+const ryd = resolvePeriod({ preset: "yd", comparison: "prev" }, T);
+eq([ryd.from, ryd.to, ryd.cmpFrom, ryd.cmpTo, ryd.label], ["2026-09-01", "2026-09-01", "2026-08-31", "2026-08-31", "Ayer"], "ayer vs anteayer");
 eq(resolvePeriod({ preset: "7d", comparison: "none" }, T).from, "2026-08-27", "ultimos 7 dias");
 eq(resolvePeriod({ preset: "90d", comparison: "none" }, T).from, "2026-06-05", "ultimos 90 dias");
 eq(resolvePeriod({ preset: "6m", comparison: "none" }, T).from, "2026-03-03", "ultimos 6 meses");

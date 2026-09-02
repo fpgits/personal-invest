@@ -169,8 +169,8 @@ npm run test:intel:db  # motor + tesis contra SQLite local
 ## Periodo de revision
 
 Arriba a la derecha de Resumen, Cartera, Alertas y Noticias hay un selector de
-periodo, el mismo en todas: presets (hoy, 7/30/90 dias, 6/12 meses, mes,
-trimestre y ano en curso) o un rango a mano en el calendario, y un rango de
+periodo, el mismo en todas: presets (hoy, ayer, 7/30/90 dias, 6/12 meses,
+mes, trimestre y ano en curso) o un rango a mano en el calendario, y un rango de
 comparacion (periodo anterior, ano anterior, ano anterior por dia de la
 semana, o uno a mano). La eleccion se guarda en una cookie (`invest_period`)
 con las fechas ya resueltas por el navegador, asi que vale para todas las
