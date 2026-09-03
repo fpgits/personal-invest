@@ -1,14 +1,14 @@
-import { streamText, type ModelMessage } from "ai";
+import { type ModelMessage } from "ai";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { aiMessages, aiThreads } from "@/db/schema";
 import { errorResponse, parseBody } from "@/lib/api";
 import { requireAuth } from "@/lib/auth";
-import { analysisModel } from "@/lib/ai/client";
-import { buildFullContext } from "@/lib/ai/context";
+import { aiStream } from "@/lib/ai/client";
+import { cachedFullContext } from "@/lib/ai/context";
+import { CHAT_LIMITS, trimHistory } from "@/lib/ai/policy";
 import { CHAT_SYSTEM } from "@/lib/ai/prompts";
-import { resolveModels } from "@/lib/settings";
 import { id } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -38,28 +38,35 @@ export async function POST(req: Request) {
       });
     }
 
-    // Historial reciente para dar continuidad sin inflar el prompt.
-    const history = await db
-      .select()
-      .from(aiMessages)
-      .where(eq(aiMessages.threadId, thread))
-      .orderBy(desc(aiMessages.createdAt))
-      .limit(20);
-
-    const context = await buildFullContext();
-    const { analysis } = await resolveModels();
+    // Historial reciente para dar continuidad, acotado en mensajes y en
+    // caracteres: un hilo largo no puede convertir cada pregunta en un
+    // prompt de decenas de miles de tokens.
+    const [rows, context] = await Promise.all([
+      db
+        .select({ role: aiMessages.role, content: aiMessages.content })
+        .from(aiMessages)
+        .where(eq(aiMessages.threadId, thread))
+        .orderBy(desc(aiMessages.createdAt))
+        .limit(CHAT_LIMITS.historyMessages),
+      cachedFullContext(),
+    ]);
+    const history = trimHistory(
+      rows.reverse().map((m) => ({
+        role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+        content: m.content,
+      })),
+    );
 
     const messages: ModelMessage[] = [
       {
         role: "system",
         content: `${CHAT_SYSTEM}\n\n# Contexto actual\n\n${context}`,
+        // El contexto es identico entre mensajes del mismo rato: los
+        // proveedores con cache de prompt (Anthropic explicita; Gemini,
+        // OpenAI y DeepSeek automatica) lo cobran a fraccion de precio.
+        providerOptions: { openrouter: { cacheControl: { type: "ephemeral" } } },
       },
-      ...history
-        .reverse()
-        .map((m) => ({
-          role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
-          content: m.content,
-        })),
+      ...history,
       { role: "user", content: message },
     ];
 
@@ -71,17 +78,16 @@ export async function POST(req: Request) {
       createdAt: Date.now(),
     });
 
-    const result = streamText({
-      model: await analysisModel(),
+    const { result, modelId } = await aiStream("chat", {
       messages,
       temperature: 0.4,
-      onFinish: async ({ text }) => {
+      onFinish: async (text) => {
         await db.insert(aiMessages).values({
           id: id(),
           threadId: thread,
           role: "assistant",
           content: text,
-          model: analysis,
+          model: modelId,
           createdAt: Date.now(),
         });
         await db
@@ -99,7 +105,7 @@ export async function POST(req: Request) {
     result.consumeStream();
 
     return result.toTextStreamResponse({
-      headers: { "x-thread-id": thread, "x-model": analysis },
+      headers: { "x-thread-id": thread, "x-model": modelId },
     });
   } catch (e) {
     return errorResponse(e);

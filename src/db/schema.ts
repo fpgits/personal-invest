@@ -380,6 +380,41 @@ export const aiMessages = sqliteTable(
   (t) => [index("ai_messages_thread_idx").on(t.threadId, t.createdAt)],
 );
 
+/**
+ * Una fila por llamada a OpenRouter, con tokens y coste. Es la base del
+ * presupuesto diario y del panel "Uso de IA": lo que no se mide no se puede
+ * acotar. El coste viene de la contabilidad de uso de OpenRouter cuando la
+ * devuelve; si no, se estima con el catalogo; si tampoco, queda en 0 y se
+ * marca `cost_source = none` para que se vea.
+ */
+export const aiCalls = sqliteTable(
+  "ai_calls",
+  {
+    id: text("id").primaryKey(),
+    /** news_summary | merge | extract | thesis_check | thesis_draft | thesis_text | risk | chat */
+    purpose: text("purpose").notNull(),
+    model: text("model").notNull(),
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    completionTokens: integer("completion_tokens").notNull().default(0),
+    /** Tokens de razonamiento (incluidos en completion en la mayoria de proveedores). */
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    /** Tokens de entrada servidos desde cache del proveedor. */
+    cachedTokens: integer("cached_tokens").notNull().default(0),
+    /** USD. */
+    cost: real("cost").notNull().default(0),
+    /** openrouter | estimate | none */
+    costSource: text("cost_source").notNull().default("none"),
+    ms: integer("ms").notNull().default(0),
+    ok: integer("ok", { mode: "boolean" }).notNull().default(true),
+    error: text("error"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    index("ai_calls_created_idx").on(t.createdAt),
+    index("ai_calls_purpose_idx").on(t.purpose, t.createdAt),
+  ],
+);
+
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -502,3 +537,4 @@ export type Fundamentals = typeof fundamentals.$inferSelect;
 export type Manager = typeof managers.$inferSelect;
 export type ManagerFiling = typeof managerFilings.$inferSelect;
 export type ManagerHolding = typeof managerHoldings.$inferSelect;
+export type AiCall = typeof aiCalls.$inferSelect;

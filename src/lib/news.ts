@@ -1,9 +1,9 @@
-import { generateObject } from "ai";
-import { and, desc, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, desc, gt, gte, inArray, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { news, type Asset, type NewsRow } from "@/db/schema";
-import { analysisModel, fastModel } from "./ai/client";
+import { aiObject } from "./ai/client";
+import { classifyError, messageOf, type FailureKind } from "./ai/errors";
 import { NEWS_SYSTEM } from "./ai/prompts";
 import { listAssets } from "./assets";
 import { finnhub, getNewsFor } from "./market";
@@ -12,6 +12,22 @@ import { getSetting, setSetting } from "./settings";
 import { id } from "./utils";
 
 export const NEWS_LAST_ERROR_KEY = "news_last_error";
+
+/**
+ * Reintentos del resumen. Una noticia cuyo resumen fallo se vuelve a
+ * intentar como mucho una vez al dia y solo mientras es reciente: el motor
+ * de eventos descarta lo de mas de 14 dias, asi que resumir algo de hace
+ * dos semanas es tirar el dinero. Antes se reenviaban TODAS las fallidas
+ * en cada pasada (cada 4 h), con dos modelos cada vez.
+ */
+export const NEWS_RETRY = {
+  /** Espera minima entre intentos de una misma noticia. */
+  cooldownMs: 24 * 3600_000,
+  /** Noticias publicadas hace mas de esto ya no se reintentan. */
+  maxAgeMs: 7 * 86400_000,
+  /** Titulares por llamada al modelo. */
+  batch: 10,
+} as const;
 
 /**
  * Las noticias cripto llegan sin ticker. Se etiquetan por nombre completo
@@ -106,24 +122,53 @@ export async function ingestNews(): Promise<number> {
 }
 
 /**
- * Resume y clasifica en lotes. Una sola llamada por lote en vez de una por
- * noticia: con 30 titulares eso es la diferencia entre 30 requests y 2.
+ * Que noticias entran en esta pasada: primero las nunca procesadas (las mas
+ * recientes antes) y, si queda hueco, las que fallaron hace mas de un dia y
+ * siguen siendo recientes. Separado para poder testearlo contra una base local.
  */
-export async function processNews(limit = 30): Promise<number> {
-  const pending = await db
+export async function selectPendingNews(limit: number, now = Date.now()): Promise<NewsRow[]> {
+  const fresh = await db
     .select()
     .from(news)
-    .where(or(isNull(news.processedAt), isNull(news.summary)))
+    .where(isNull(news.processedAt))
     .orderBy(desc(news.publishedAt))
     .limit(limit);
+  if (fresh.length >= limit) return fresh;
 
+  const retries = await db
+    .select()
+    .from(news)
+    .where(
+      and(
+        isNotNull(news.processedAt),
+        isNull(news.summary),
+        lt(news.processedAt, now - NEWS_RETRY.cooldownMs),
+        gt(news.publishedAt, now - NEWS_RETRY.maxAgeMs),
+      ),
+    )
+    .orderBy(desc(news.publishedAt))
+    .limit(limit - fresh.length);
+  return [...fresh, ...retries];
+}
+
+/**
+ * Resume y clasifica en lotes. Una sola llamada por lote en vez de una por
+ * noticia: con 30 titulares eso es la diferencia entre 30 requests y 3.
+ *
+ * Fallos: un rechazo del proveedor o una salida invalida se reintenta una
+ * vez con el modelo de analisis; si tampoco, el lote se marca como visto y
+ * volvera a intentarse pasado un dia (`NEWS_RETRY`). Un fallo transitorio
+ * (red, cuota, 5xx, timeout) o el presupuesto agotado paran la pasada sin
+ * marcar nada: se retoma en el siguiente cron tal cual.
+ */
+export async function processNews(limit = 30): Promise<number> {
+  const pending = await selectPendingNews(limit);
   if (pending.length === 0) return 0;
 
-  const BATCH = 10;
   let processed = 0;
 
-  for (let i = 0; i < pending.length; i += BATCH) {
-    const batch = pending.slice(i, i + BATCH);
+  for (let i = 0; i < pending.length; i += NEWS_RETRY.batch) {
+    const batch = pending.slice(i, i + NEWS_RETRY.batch);
     const prompt = batch
       .map(
         (n, idx) =>
@@ -133,10 +178,10 @@ export async function processNews(limit = 30): Promise<number> {
       )
       .join("\n");
 
-    try {
-      const { object } = await summarizeBatch(prompt);
+    const res = await summarizeBatch(prompt);
 
-      for (const item of object.items) {
+    if (res.ok) {
+      for (const item of res.object.items) {
         const row = batch[item.index];
         if (!row) continue;
         await db
@@ -150,23 +195,20 @@ export async function processNews(limit = 30): Promise<number> {
           .where(inArray(news.id, [row.id]));
         processed++;
       }
-    } catch (e) {
-      // Si los dos modelos fallan marcamos el lote como visto para no
-      // reintentar en bucle en cada cron. El titular sigue siendo util sin
-      // resumen. El motivo queda en los logs y en Ajustes/Noticias: un modelo
-      // mal configurado se ve, no se esconde tras un 200 vacio.
-      const message = e instanceof Error ? e.message : String(e);
-      console.error("[news] resumen fallo:", message);
-      await setSetting(NEWS_LAST_ERROR_KEY, JSON.stringify({ at: Date.now(), message })).catch(
-        () => undefined,
-      );
-      for (const row of batch) {
-        await db
-          .update(news)
-          .set({ processedAt: Date.now() })
-          .where(inArray(news.id, [row.id]));
-      }
+      continue;
     }
+
+    // El motivo queda en los logs y en Ajustes/Noticias: un modelo mal
+    // configurado se ve, no se esconde tras un 200 vacio.
+    console.error(`[news] resumen fallo (${res.kind}):`, res.message);
+    await setSetting(NEWS_LAST_ERROR_KEY, JSON.stringify({ at: Date.now(), message: res.message })).catch(
+      () => undefined,
+    );
+    if (res.kind === "transient" || res.kind === "budget") break;
+    await db
+      .update(news)
+      .set({ processedAt: Date.now() })
+      .where(inArray(news.id, batch.map((row) => row.id)));
   }
 
   if (processed > 0) {
@@ -175,30 +217,38 @@ export async function processNews(limit = 30): Promise<number> {
   return processed;
 }
 
+type BatchResult =
+  | { ok: true; object: z.infer<typeof analysisSchema> }
+  | { ok: false; kind: FailureKind; message: string };
+
 /**
- * Resume con el modelo rapido y, si este falla (modelo mal configurado,
- * sin salida estructurada, cuota), reintenta una vez con el de analisis:
- * son 10 titulares, cuesta centimos, y deja el motor de eventos alimentado.
+ * Resume con el modelo rapido. Si este RECHAZA la peticion o devuelve algo
+ * invalido (modelo mal configurado, sin salida estructurada), reintenta una
+ * vez con el de analisis: son 10 titulares y deja el motor de eventos
+ * alimentado. Un fallo transitorio no se reintenta con el modelo caro: si
+ * OpenRouter esta caido o sin cuota, el otro modelo fallara igual y costaria
+ * el doble de intentos.
  */
-async function summarizeBatch(prompt: string) {
-  const run = async (model: Awaited<ReturnType<typeof fastModel>>) =>
-    generateObject({
-      model,
+async function summarizeBatch(prompt: string): Promise<BatchResult> {
+  const run = async (tier: "fast" | "analysis") =>
+    aiObject("news_summary", {
       schema: analysisSchema,
       system: NEWS_SYSTEM,
       prompt: `Analiza estos titulares y devuelve un objeto por cada uno, usando el mismo index:\n\n${prompt}`,
       temperature: 0.2,
-      maxRetries: 1,
-      abortSignal: AbortSignal.timeout(45_000),
+      tier,
     });
   try {
-    return await run(await fastModel());
+    return { ok: true, object: (await run("fast")).object };
   } catch (e) {
-    console.warn(
-      "[news] modelo rapido fallo, probando con el de analisis:",
-      e instanceof Error ? e.message : String(e),
-    );
-    return run(await analysisModel());
+    const kind = classifyError(e);
+    if (kind === "transient" || kind === "budget") return { ok: false, kind, message: messageOf(e) };
+    console.warn("[news] modelo rapido fallo, probando con el de analisis:", messageOf(e));
+    try {
+      return { ok: true, object: (await run("analysis")).object };
+    } catch (e2) {
+      return { ok: false, kind: classifyError(e2), message: messageOf(e2) };
+    }
   }
 }
 

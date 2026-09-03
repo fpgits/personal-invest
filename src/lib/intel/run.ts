@@ -11,6 +11,7 @@ import {
   type EventRow,
   type NewsRow,
 } from "@/db/schema";
+import { isBudgetError } from "@/lib/ai/errors";
 import { listAssets } from "@/lib/assets";
 import { fundamentalsToText, getFundamentalsMap } from "@/lib/fundamentals";
 import { computePortfolio } from "@/lib/portfolio";
@@ -109,6 +110,8 @@ export type RunStats = {
   warning?: string;
   /** true si otra pasada tenia el cerrojo y esta no hizo nada. */
   locked?: boolean;
+  /** true si la pasada se detuvo por el presupuesto diario de IA. */
+  budget?: boolean;
 };
 
 export type IntelDeps = {
@@ -163,6 +166,7 @@ export async function processEvents(
         `pendientes=${stats.deferred} invalidos=${stats.invalid} rechazados=${stats.rejected} ` +
         `transitorios=${stats.transient} abandonados=${stats.abandoned} propuestas=${stats.proposals} ` +
         `ms=${stats.finishedAt - stats.startedAt}` +
+        (stats.budget ? " presupuesto=agotado" : "") +
         (stats.error ? ` error=${JSON.stringify(stats.error)}` : "") +
         (stats.warning ? ` aviso=${JSON.stringify(stats.warning)}` : ""),
     );
@@ -288,6 +292,14 @@ async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
     const res = await D.extract(cluster, ctx);
 
     if (!res.ok) {
+      if (res.kind === "budget") {
+        // No es un fallo: el presupuesto diario de IA se ha gastado. El
+        // resto queda pendiente y se retoma manana.
+        stats.budget = true;
+        stats.warning = res.message;
+        stats.deferred += remaining + 1;
+        break;
+      }
       stats.error = res.message;
       console.warn(`[intel] extraccion ${res.kind} (${cluster.key}): ${res.message}`);
       if (res.countsAttempt) {
@@ -375,6 +387,11 @@ async function run(stats: RunStats, L: typeof INTEL_LIMITS, D: IntelDeps) {
       const created = await D.propose(eventId);
       if (created) stats.proposals++;
     } catch (e) {
+      if (isBudgetError(e)) {
+        stats.budget = true;
+        stats.warning = e.message;
+        break;
+      }
       console.warn("[intel] propuesta de tesis fallo:", e instanceof Error ? e.message : String(e));
     }
   }

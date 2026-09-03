@@ -1,10 +1,8 @@
-import { generateText } from "ai";
-import { analysisModel } from "@/lib/ai/client";
+import { aiText } from "@/lib/ai/client";
 import { portfolioToText } from "@/lib/ai/context";
 import { RISK_SYSTEM } from "@/lib/ai/prompts";
 import { protectedRoute } from "@/lib/api";
 import { computePortfolio } from "@/lib/portfolio";
-import { resolveModels } from "@/lib/settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,9 +17,7 @@ export const POST = protectedRoute(async () => {
     );
   }
 
-  const { analysis: modelId } = await resolveModels();
-  const { text } = await generateText({
-    model: await analysisModel(),
+  const { text, modelId } = await aiText("risk", {
     system: RISK_SYSTEM,
     prompt: portfolioToText(portfolio),
     temperature: 0.3,

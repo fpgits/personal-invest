@@ -32,6 +32,14 @@ export const env = {
   get siteName() {
     return opt("OPENROUTER_SITE_NAME", "Fernando Portela");
   },
+  /**
+   * Tope diario en USD para las llamadas de fondo (resumenes, eventos,
+   * propuestas de tesis). Se puede cambiar en Ajustes sin redeploy; 0 = sin
+   * limite. Lo que pides a mano (chat, riesgo, tesis) nunca se bloquea.
+   */
+  get aiDailyBudgetUsd() {
+    return opt("AI_DAILY_BUDGET_USD");
+  },
   get finnhubKey() {
     return opt("FINNHUB_API_KEY");
   },

@@ -59,6 +59,7 @@ pantalla diciendo exactamente que falta.
 | `AUTH_SECRET` | si | `openssl rand -base64 32` |
 | `ENCRYPTION_KEY` | si (para exchanges) | `openssl rand -base64 32`, exactamente 32 bytes |
 | `OPENROUTER_API_KEY` | no | openrouter.ai/keys. Sin esto no hay IA |
+| `AI_DAILY_BUDGET_USD` | no | Tope diario en USD para las tareas de fondo de IA (defecto 2, 0 = sin limite). Editable en /ajustes |
 | `FINNHUB_API_KEY` | no | finnhub.io/register. Sin esto no hay precios de acciones |
 | `SEC_CONTACT_EMAIL` | no | Tu email, para el User-Agent que exige la SEC. Sin esto no se leen filings ni 13F de EDGAR |
 | `OPENFIGI_API_KEY` | no | openfigi.com/api. Opcional: sube el limite de CUSIP → ticker de 25 a 250 req/min (Inversores) |
@@ -287,6 +288,46 @@ El catalogo de OpenRouter cambia cada semana, asi que no hay modelos
 hardcodeados: `/ajustes` lee la lista en vivo y guarda tu eleccion en la base de
 datos.
 
+### Coste y control de gasto
+
+Toda llamada a OpenRouter pasa por una sola puerta (`src/lib/ai/client.ts`:
+`aiObject`, `aiText`, `aiStream`) que aplica la politica de `src/lib/ai/policy.ts`.
+Esa tabla, editable en un sitio, fija por tipo de llamada el modelo (rapido o de
+analisis), el tope de tokens de salida, el esfuerzo de razonamiento y el timeout:
+
+| Tipo | Modelo | Salida | Razonamiento | Fondo |
+|---|---|---|---|---|
+| Resumen de noticias | rapido | 2000 | bajo | si |
+| Agrupacion (merge) | rapido | 800 | bajo | si |
+| Extraccion de eventos | analisis | 2500 | medio | si |
+| Contraste con tesis | analisis | 2000 | medio | si |
+| Borrador de tesis | analisis | 4000 | — | no |
+| Tesis en texto | analisis | 2500 | — | no |
+| Riesgo | analisis | 2500 | — | no |
+| Chat | analisis | 3000 | — | no |
+
+Cada llamada, buena o mala, deja una fila en `ai_calls` con tokens y coste. El
+coste sale de la contabilidad de uso de OpenRouter (`usage: { include: true }`),
+que viene en la propia respuesta sin una peticion extra; si el proveedor no lo
+devuelve, se estima con el precio del catalogo, y si tampoco hay precio queda a 0
+marcado como desconocido. `/ajustes` → **Uso de IA** muestra hoy, 7 y 30 dias,
+el desglose por tipo y los ultimos fallos.
+
+**Presupuesto diario** (`AI_DAILY_BUDGET_USD`, por defecto 2 USD; se puede
+cambiar en `/ajustes` sin redeploy, 0 = sin limite). Solo frena el **trabajo de
+fondo** (resumenes, eventos, propuestas): cuando el gasto del dia (UTC) llega al
+tope, los crons se paran y siguen al dia siguiente. El chat, el riesgo y las
+tesis que pides a mano nunca se bloquean.
+
+**Ahorro estructural**, ademas de los topes: el resumen de noticias solo
+reintenta lo que fallo una vez al dia y mientras es reciente (antes reenviaba
+todo cada 4 h con dos modelos); un fallo transitorio no se reintenta con el
+modelo caro; el contexto del chat se cachea 10 min y se marca con
+`cache_control` para que los proveedores con cache de prompt lo cobren a
+fraccion de precio; el historial del chat se acota a ~16k caracteres; y el
+modelo configurado se lee de la base de datos como mucho una vez por minuto en
+vez de en cada llamada.
+
 ## Comandos
 
 ```bash
@@ -294,7 +335,7 @@ npm run dev            # desarrollo
 npm run build          # build de produccion
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint
-npm run test           # todos los tests (P&L, IBKR, inteligencia, fuentes, inversores)
+npm run test           # todos los tests (P&L, IBKR, inteligencia, fuentes, inversores, IA)
 npm run db:generate    # genera migracion SQL desde el schema
 npm run db:push        # aplica el schema a Turso
 npm run db:studio      # explorador de la base de datos
@@ -311,7 +352,7 @@ src/
     api/          route handlers, incluidos los cron
     login/
   components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
-  db/             schema.ts (22 tablas) y cliente perezoso de libsql
+  db/             schema.ts (23 tablas, incl. ai_calls) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
     period.ts     periodo de revision (presets, comparacion, cookie) y period-metrics.ts (resultado por periodo)
@@ -320,7 +361,7 @@ src/
     sync.ts       enruta cada cuenta a su integracion
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
     brokers/      ibkr.ts (Flex Web Service) y sync.ts (bolsa)
-    ai/           client.ts, context.ts, prompts.ts
+    ai/           client.ts (puerta unica + contabilidad + presupuesto), policy.ts (topes por tipo), errors.ts, context.ts, prompts.ts
     intel/        motor de inteligencia: sources, dedup, extract, score, run, calibration
     thesis.ts     tesis estructurada: supuestos, propuestas desde eventos, historial
     edgar.ts      SEC EDGAR: CIK, filings, texto de 8-K/10-Q

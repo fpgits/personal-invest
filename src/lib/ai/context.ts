@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { news, theses } from "@/db/schema";
 import { computePortfolio, type PortfolioSummary } from "@/lib/portfolio";
 import { fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
+import { CHAT_LIMITS } from "./policy";
 
 /**
  * Convierte la cartera en texto compacto para meter en el prompt.
@@ -75,6 +76,22 @@ export function portfolioToText(p: PortfolioSummary): string {
 export async function buildPortfolioContext(): Promise<string> {
   const p = await computePortfolio();
   return portfolioToText(p);
+}
+
+/**
+ * El contexto del chat (cartera, tesis, noticias) se reconstruye como mucho
+ * cada `CHAT_LIMITS.contextTtlMs` por instancia: entre dos mensajes seguidos
+ * no cambia nada que importe y ahorra las consultas y el refresco de precios.
+ * Ademas, un prompt identico entre mensajes es lo que permite a los
+ * proveedores servirlo desde su cache.
+ */
+let contextMemo: { at: number; text: string } | null = null;
+
+export async function cachedFullContext(ttlMs = CHAT_LIMITS.contextTtlMs): Promise<string> {
+  if (contextMemo && Date.now() - contextMemo.at < ttlMs) return contextMemo.text;
+  const text = await buildFullContext();
+  contextMemo = { at: Date.now(), text };
+  return text;
 }
 
 /** Contexto extra: tesis guardadas y noticias recientes. */

@@ -4,9 +4,10 @@ import useSWR from "swr";
 import { useState } from "react";
 import { Check, RefreshCw } from "lucide-react";
 import { Card, CardTitle, PageTitle } from "@/components/ui";
+import type { AiUsageResponse, UsageBucket } from "@/lib/ai/policy";
 import type { HistorySummary, RebuildReport } from "@/lib/history";
 import { fmtDay } from "@/lib/period";
-import { api } from "@/lib/utils";
+import { api, fmtDateTime } from "@/lib/utils";
 
 type ModelInfo = {
   id: string;
@@ -45,6 +46,8 @@ export default function AjustesPage() {
   const [fastEdit, setFastEdit] = useState<string | null>(null);
   const [currencyEdit, setCurrencyEdit] = useState<string | null>(null);
   const [costMethodEdit, setCostMethodEdit] = useState<string | null>(null);
+  const [budgetEdit, setBudgetEdit] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const analysis = analysisEdit ?? data?.current?.analysis ?? "";
   const fast = fastEdit ?? data?.current?.fast ?? "";
@@ -56,7 +59,8 @@ export default function AjustesPage() {
   async function save() {
     setBusy(true);
     setSaved(false);
-    await fetch(api("/api/settings"), {
+    setSaveError(null);
+    const res = await fetch(api("/api/settings"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -64,10 +68,17 @@ export default function AjustesPage() {
         model_fast: fast,
         base_currency: currency,
         cost_method: costMethod,
+        ...(budgetEdit !== null ? { ai_daily_budget_usd: budgetEdit } : {}),
       }),
     });
     setBusy(false);
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setSaveError(json.error ?? `No se pudo guardar (HTTP ${res.status})`);
+      return;
+    }
     setSaved(true);
+    setBudgetEdit(null);
     mutate();
     setTimeout(() => setSaved(false), 2500);
   }
@@ -171,6 +182,12 @@ export default function AjustesPage() {
         </div>
       </Card>
 
+      <UsageCard
+        budgetEdit={budgetEdit}
+        onBudgetChange={setBudgetEdit}
+        storedBudget={settingsData?.settings?.ai_daily_budget_usd ?? null}
+      />
+
       <button
         onClick={save}
         disabled={busy}
@@ -179,9 +196,183 @@ export default function AjustesPage() {
         {saved && <Check size={15} />}
         {busy ? "Guardando..." : saved ? "Guardado" : "Guardar ajustes"}
       </button>
+      {saveError && <p className="mt-2 text-sm text-down">{saveError}</p>}
 
       <HistoryCard />
     </>
+  );
+}
+
+const usd = (n: number) =>
+  n >= 1 ? `$${n.toFixed(2)}` : n > 0 ? `$${n.toFixed(4)}` : "$0";
+const tokens = (n: number) =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+/**
+ * Uso y coste de OpenRouter, con el presupuesto diario editable. El gasto se
+ * lee de `ai_calls`: cada llamada, buena o mala, deja tokens y coste.
+ */
+function UsageCard({
+  budgetEdit,
+  onBudgetChange,
+  storedBudget,
+}: {
+  budgetEdit: string | null;
+  onBudgetChange: (v: string) => void;
+  storedBudget: string | null;
+}) {
+  const { data, error } = useSWR<AiUsageResponse>(api("/api/ai/usage"), fetcher, {
+    refreshInterval: 60_000,
+  });
+
+  const budgetValue =
+    budgetEdit ?? storedBudget ?? (data ? String(data.budget.limitUsd) : "");
+  const b = data?.budget;
+
+  return (
+    <Card className="mb-4">
+      <CardTitle>Uso de IA (OpenRouter)</CardTitle>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className={label} htmlFor="budget">
+            Presupuesto diario para tareas de fondo (USD)
+          </label>
+          <input
+            id="budget"
+            inputMode="decimal"
+            value={budgetValue}
+            onChange={(e) => onBudgetChange(e.target.value)}
+            placeholder="2"
+            className={`${field} font-mono`}
+          />
+          <p className="mt-1.5 text-xs text-faint">
+            Resumen de noticias, eventos y propuestas de tesis se paran al llegar aqui y siguen al dia
+            siguiente (UTC). El chat, el riesgo y las tesis que pides a mano nunca se bloquean. 0 = sin
+            limite.
+            {b && b.source !== "settings" && (
+              <> Ahora mismo vale por {b.source === "env" ? "la variable AI_DAILY_BUDGET_USD" : "defecto"}.</>
+            )}
+          </p>
+        </div>
+
+        <div>
+          <p className={label}>Hoy</p>
+          {b ? (
+            <>
+              <p className={`text-2xl font-semibold tabular-nums ${b.blocked ? "text-down" : ""}`}>
+                {usd(b.spentUsd)}
+                {b.limitUsd > 0 && <span className="text-sm font-normal text-muted"> de {usd(b.limitUsd)}</span>}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                {b.todayCalls} llamadas hoy.{" "}
+                {b.blocked
+                  ? "Presupuesto agotado: las tareas de fondo esperan a manana."
+                  : b.limitUsd > 0
+                    ? `Quedan ${usd(b.remainingUsd ?? 0)}.`
+                    : "Sin limite."}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-faint">{error ? "No se pudo leer el uso." : "Cargando..."}</p>
+          )}
+        </div>
+      </div>
+
+      {data && (
+        <>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <Bucket title="Hoy" b={data.today} />
+            <Bucket title="7 dias" b={data.week} />
+            <Bucket title="30 dias" b={data.month} />
+          </div>
+
+          {data.byPurpose.length > 0 ? (
+            <div className="mt-5 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="text-left text-faint">
+                  <tr>
+                    <th className="pb-2 font-normal">Tipo (30 dias)</th>
+                    <th className="pb-2 text-right font-normal">Llamadas</th>
+                    <th className="pb-2 text-right font-normal">Entrada</th>
+                    <th className="pb-2 text-right font-normal">Salida</th>
+                    <th className="pb-2 text-right font-normal">Razonam.</th>
+                    <th className="pb-2 text-right font-normal">Coste</th>
+                    <th className="pb-2 text-right font-normal">Media</th>
+                  </tr>
+                </thead>
+                <tbody className="tabular-nums">
+                  {data.byPurpose.map((p) => (
+                    <tr key={p.purpose} className="border-t border-border">
+                      <td className="py-1.5 pr-2">
+                        {p.label}
+                        <span className="ml-1.5 text-faint">
+                          {data.policy[p.purpose as keyof typeof data.policy]?.tier === "fast" ? "rapido" : "analisis"}
+                        </span>
+                      </td>
+                      <td className="py-1.5 text-right">
+                        {p.calls}
+                        {p.failed > 0 && <span className="text-down"> ({p.failed} fallidas)</span>}
+                      </td>
+                      <td className="py-1.5 text-right">
+                        {tokens(p.promptTokens)}
+                        {p.cachedTokens > 0 && <span className="text-faint"> ({tokens(p.cachedTokens)} cache)</span>}
+                      </td>
+                      <td className="py-1.5 text-right">{tokens(p.completionTokens)}</td>
+                      <td className="py-1.5 text-right">{tokens(p.reasoningTokens)}</td>
+                      <td className="py-1.5 text-right">{usd(p.cost)}</td>
+                      <td className="py-1.5 text-right">{p.avgMs > 0 ? `${(p.avgMs / 1000).toFixed(1)}s` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 text-xs text-faint">Todavia no hay ninguna llamada registrada.</p>
+          )}
+
+          {data.month.unknownCost > 0 && (
+            <p className="mt-3 text-xs text-warn">
+              {data.month.unknownCost} llamadas sin coste conocido (OpenRouter no lo devolvio y el catalogo
+              no tenia precio): el gasto real es algo mayor que el mostrado.
+            </p>
+          )}
+
+          {data.lastErrors.length > 0 && (
+            <div className="mt-4 rounded-lg border border-border bg-bg p-3 text-xs text-muted">
+              <p className="mb-1 text-faint">Ultimos fallos</p>
+              {data.lastErrors.map((e, i) => (
+                <p key={i} className="truncate">
+                  {fmtDateTime(e.at)} · {data.policy[e.purpose as keyof typeof data.policy]?.label ?? e.purpose} ·{" "}
+                  <span className="font-mono">{e.model}</span>: {e.error}
+                </p>
+              ))}
+            </div>
+          )}
+
+          <p className="mt-4 text-xs text-faint">
+            Modelos: <span className="font-mono">{data.models.fast}</span> para lo barato en volumen,{" "}
+            <span className="font-mono">{data.models.analysis}</span> para lo que razona. Cada tipo de llamada
+            tiene tope de salida, esfuerzo de razonamiento y timeout fijados en <code>src/lib/ai/policy.ts</code>;
+            las tareas de fondo se enrutan al proveedor mas barato del modelo. El coste viene de la contabilidad
+            de uso de OpenRouter en cada respuesta.
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Bucket({ title, b }: { title: string; b: UsageBucket }) {
+  return (
+    <div className="rounded-lg border border-border bg-bg p-3">
+      <p className="text-xs text-faint">{title}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{usd(b.cost)}</p>
+      <p className="text-xs text-muted">
+        {b.calls} llamadas · {tokens(b.promptTokens)} entrada · {tokens(b.completionTokens)} salida
+        {b.failed > 0 && <span className="text-down"> · {b.failed} fallidas</span>}
+      </p>
+    </div>
   );
 }
 

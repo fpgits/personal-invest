@@ -1,4 +1,3 @@
-import { generateObject } from "ai";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
@@ -14,7 +13,7 @@ import {
   type ThesisAssumption,
   type ThesisChange,
 } from "@/db/schema";
-import { analysisModel } from "./ai/client";
+import { aiObject } from "./ai/client";
 import { THESIS_CHECK_SYSTEM, THESIS_PROMPT_VERSION, THESIS_STRUCT_SYSTEM } from "./ai/prompts";
 import { fundamentalsToText, getFundamentals, refreshFundamentals, type FundamentalsView } from "./fundamentals";
 import { clean, stripTradeAdvice } from "./intel/extract";
@@ -216,18 +215,14 @@ export async function generateThesisDraft(asset: Asset): Promise<ThesisDraft> {
     .filter((l) => l !== "")
     .join("\n");
 
-  const model = await analysisModel();
-  const { object } = await generateObject({
-    model,
+  const { object, modelId } = await aiObject("thesis_draft", {
     schema: thesisStructureSchema,
     system: THESIS_STRUCT_SYSTEM,
     prompt,
     temperature: 0.3,
-    maxRetries: 1,
-    abortSignal: AbortSignal.timeout(90_000),
   });
 
-  return { structure: sanitizeStructure(object), model: model.modelId, promptVersion: THESIS_PROMPT_VERSION };
+  return { structure: sanitizeStructure(object), model: modelId, promptVersion: THESIS_PROMPT_VERSION };
 }
 
 export function sanitizeStructure(s: ThesisStructure): ThesisStructure {
@@ -461,17 +456,13 @@ export type ProposeDeps = {
 };
 
 const defaultCheck: ProposeDeps["check"] = async (prompt) => {
-  const model = await analysisModel();
-  const { object } = await generateObject({
-    model,
+  const { object, modelId } = await aiObject("thesis_check", {
     schema: thesisCheckSchema,
     system: THESIS_CHECK_SYSTEM,
     prompt,
     temperature: 0.1,
-    maxRetries: 1,
-    abortSignal: AbortSignal.timeout(60_000),
   });
-  return { object, model: model.modelId };
+  return { object, model: modelId };
 };
 
 /** Prompt puro para poder testearlo. */

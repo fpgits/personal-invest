@@ -1,14 +1,12 @@
-import { generateText } from "ai";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { theses } from "@/db/schema";
-import { analysisModel } from "@/lib/ai/client";
+import { aiText } from "@/lib/ai/client";
 import { THESIS_SYSTEM } from "@/lib/ai/prompts";
 import { ok, parseBody, protectedRoute } from "@/lib/api";
 import { ensureAsset } from "@/lib/assets";
 import { computePortfolio } from "@/lib/portfolio";
-import { resolveModels } from "@/lib/settings";
 import { fmtMoney, fmtPct, fmtQty, id } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -55,9 +53,7 @@ export const POST = protectedRoute(async (req) => {
       ].join("\n")
     : `Fernando no tiene posicion abierta en ${asset.symbol}.`;
 
-  const { analysis: modelId } = await resolveModels();
-  const { text } = await generateText({
-    model: await analysisModel(),
+  const { text, modelId } = await aiText("thesis_text", {
     system: THESIS_SYSTEM,
     prompt: `Activo: ${asset.symbol} (${asset.name}), clase ${asset.assetClass}.\n\n${position}`,
     temperature: 0.5,

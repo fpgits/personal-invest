@@ -20,7 +20,8 @@
     "test:managers": "tsx scripts/test-managers.ts",
     "test:period": "tsx scripts/test-period.ts",
     "test:history": "tsx scripts/test-history.ts",
-    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:intel:db"
+    "test:ai": "tsx scripts/test-ai.ts",
+    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:ai && npm run test:intel:db"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",
