@@ -336,6 +336,45 @@ export const managerHoldings = sqliteTable(
   (t) => [uniqueIndex("manager_holdings_filing_cusip_idx").on(t.filingId, t.cusip)],
 );
 
+/**
+ * Aportes y retiros REALES de efectivo a cada cuenta (dinero que metes o
+ * sacas), con su fecha e importe verdaderos. Es el historial de capital
+ * inyectado, y va aparte de los plugs de reconciliacion de `transactions`
+ * (que solo reflejan el saldo actual y se reescriben en cada sync). De aqui
+ * sale el "capital neto aportado", que es justo lo que NO debe contar como
+ * ganancia.
+ *
+ * Origen:
+ *  - IBKR: seccion Cash Transactions de la Flex Query (tipo Deposits/Withdrawals).
+ *  - Exchange: depositos/retiros de efectivo (fiat y stablecoins) via ccxt,
+ *    mejor esfuerzo (la API limita la ventana historica).
+ */
+export const cashFlows = sqliteTable(
+  "cash_flows",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /** deposit | withdrawal */
+    kind: text("kind").notNull(),
+    /** Magnitud positiva en `currency`. */
+    amount: real("amount").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    occurredAt: integer("occurred_at").notNull(),
+    /** id estable de la fuente para no duplicar al reimportar periodos solapados. */
+    externalId: text("external_id").notNull(),
+    /** ibkr | binance (o el id del exchange) | manual */
+    source: text("source").notNull().default("sync"),
+    note: text("note"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("cash_flows_account_external_idx").on(t.accountId, t.externalId),
+    index("cash_flows_occurred_idx").on(t.occurredAt),
+  ],
+);
+
 /** CUSIP → ticker (OpenFIGI), cacheado para no repetir consultas. */
 export const cusipMap = sqliteTable("cusip_map", {
   cusip: text("cusip").primaryKey(),
@@ -538,3 +577,4 @@ export type Manager = typeof managers.$inferSelect;
 export type ManagerFiling = typeof managerFilings.$inferSelect;
 export type ManagerHolding = typeof managerHoldings.$inferSelect;
 export type AiCall = typeof aiCalls.$inferSelect;
+export type CashFlow = typeof cashFlows.$inferSelect;

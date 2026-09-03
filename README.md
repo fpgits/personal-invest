@@ -99,8 +99,9 @@ Montarlo en Client Portal:
 
 1. **Performance & Reports** y luego **Flex Queries**.
 2. Crea una **Activity Flex Query** con al menos **Trades** y **Open
-   Positions**. Anade **Cash Transactions** si quieres que entren los
-   dividendos, **Cash Report** para el saldo de efectivo y **Equity Summary
+   Positions**. Anade **Cash Transactions** para que entren los dividendos y
+   tus **aportes/retiros de efectivo** (Deposits & Withdrawals → historial de
+   capital), **Cash Report** para el saldo de efectivo y **Equity Summary
    in Base by Report Date** para que la reconstruccion del historico use el
    efectivo real de cada dia. Formato XML.
 3. Apunta el **Query ID**.
@@ -155,6 +156,25 @@ Las comisiones suman al coste en las compras y restan del ingreso en las ventas.
 Los dividendos se acumulan aparte y no tocan la cantidad. Un `transfer_out` no
 realiza P&L: el activo sigue siendo tuyo, solo cambio de sitio.
 
+### Aportes de capital
+
+El efectivo que metes a una cuenta no es una ganancia, asi que va aparte del
+P&L. La tabla `cash_flows` guarda el historial real de **aportes y retiros**
+(con su fecha e importe verdaderos), separada de los plugs de reconciliacion de
+`transactions` (que solo reflejan el saldo actual y se reescriben en cada sync).
+De ahi sale el **capital neto aportado** (aportes − retiros) y el **retorno
+sobre lo aportado** = valor actual − neto aportado, que ves en Cartera.
+
+De donde sale el dato:
+
+- **IBKR**: de la seccion **Cash Transactions** de la Flex Query, filas
+  Deposits/Withdrawals. Fecha e importe exactos.
+- **Exchange (Binance...)**: depositos/retiros de efectivo (fiat y stablecoins)
+  via ccxt, **mejor esfuerzo**: la API limita cada consulta a ~90 dias, asi que
+  el primer sync hace un barrido profundo y los siguientes solo la ventana
+  reciente; el historial muy antiguo puede quedar incompleto. Mover cripto de
+  inversion no cuenta como "cash inyectado". Todo con upsert idempotente.
+
 El motor tiene tests con cifras calculadas a mano, y el parser de IBKR tiene
 los suyos con XML de ejemplo con la forma real que devuelve Flex:
 
@@ -167,6 +187,8 @@ npm run test:sources   # EDGAR, fundamentales, cripto, tesis, calibracion
 npm run test:managers  # inversores 13F, parseo y sync con EDGAR falso
 npm run test:period    # periodo de revision y metricas por periodo
 npm run test:history   # reconstruccion del historico (Stooq, CoinGecko, Equity Summary)
+npm run test:ai        # politica de IA: presupuesto, contabilidad, recorte de contexto
+npm run test:cashflows # aportes de capital: extraccion, neto aportado, retorno
 npm run test:intel:db  # motor + tesis contra SQLite local
 ```
 
@@ -352,9 +374,10 @@ src/
     api/          route handlers, incluidos los cron
     login/
   components/     ui.tsx (primitivas), charts.tsx, nav.tsx, formularios
-  db/             schema.ts (23 tablas, incl. ai_calls) y cliente perezoso de libsql
+  db/             schema.ts (24 tablas, incl. ai_calls y cash_flows) y cliente perezoso de libsql
   lib/
     portfolio.ts  motor de P&L, con tests
+    cashflows.ts  aportes/retiros de efectivo: extraccion (IBKR/exchange), neto aportado, retorno
     period.ts     periodo de revision (presets, comparacion, cookie) y period-metrics.ts (resultado por periodo)
     history.ts    reconstruccion del historico con cierres diarios (market/stooq.ts, CoinGecko) y Equity Summary de IBKR
     market/       finnhub.ts, coingecko.ts y el router entre ambos

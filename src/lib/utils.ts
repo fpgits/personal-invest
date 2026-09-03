@@ -18,12 +18,24 @@ export function id(): string {
 }
 
 export function fmtMoney(value: number, currency = "USD", compact = false) {
-  return new Intl.NumberFormat("es-ES", {
-    style: "currency",
-    currency,
-    notation: compact ? "compact" : "standard",
-    maximumFractionDigits: Math.abs(value) < 1 && value !== 0 ? 6 : 2,
-  }).format(value);
+  const maximumFractionDigits = Math.abs(value) < 1 && value !== 0 ? 6 : 2;
+  try {
+    return new Intl.NumberFormat("es-ES", {
+      style: "currency",
+      currency,
+      notation: compact ? "compact" : "standard",
+      maximumFractionDigits,
+    }).format(value);
+  } catch {
+    // Codigos que no son ISO 4217 (USDT, USDC y demas stablecoins) revientan
+    // Intl con RangeError. Valen 1:1 en USD, asi que se formatean como numero
+    // con el codigo detras en vez de tumbar la pagina.
+    const n = new Intl.NumberFormat("es-ES", {
+      notation: compact ? "compact" : "standard",
+      maximumFractionDigits,
+    }).format(value);
+    return `${n} ${currency}`;
+  }
 }
 
 export function fmtPct(value: number, digits = 2) {

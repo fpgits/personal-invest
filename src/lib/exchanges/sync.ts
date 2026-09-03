@@ -2,10 +2,18 @@ import { and, eq, like, notLike } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, transactions, type Account } from "@/db/schema";
 import { makeAssetResolver } from "@/lib/assets";
+import { exchangeCashFlows, upsertCashFlows } from "@/lib/cashflows";
 import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
 import { chunk, id } from "@/lib/utils";
-import { cleanError, clientFor, fetchBalances, fetchTrades, isCash } from "./ccxt";
+import {
+  cleanError,
+  clientFor,
+  fetchBalances,
+  fetchCashTransfers,
+  fetchTrades,
+  isCash,
+} from "./ccxt";
 
 const RECONCILE_PREFIX = "reconcile-";
 
@@ -13,6 +21,7 @@ export type SyncResult = {
   accountId: string;
   ok: boolean;
   importedTrades: number;
+  importedCashFlows: number;
   reconciled: number;
   error?: string;
 };
@@ -38,6 +47,7 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
       accountId: account.id,
       ok: false,
       importedTrades: 0,
+      importedCashFlows: 0,
       reconciled: 0,
       error: SYNC_BUSY_ERROR,
     };
@@ -55,6 +65,20 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
       ? account.lastSyncAt - 86_400_000
       : undefined;
     const trades = await fetchTrades(ex, currencies, since).catch(() => []);
+
+    // Aportes/retiros de efectivo (fiat y stablecoins) → historial de capital.
+    // Mejor esfuerzo: barrido profundo en el primer sync, ventana reciente
+    // despues. Un fallo no puede tumbar el sync. Va a cash_flows, no a trades.
+    const importedCashFlows = await fetchCashTransfers(ex, { deep: !account.lastSyncAt })
+      .then((transfers) =>
+        upsertCashFlows(
+          exchangeCashFlows(transfers, account.id, account.exchangeId ?? "exchange"),
+        ),
+      )
+      .catch((e) => {
+        console.warn("[exchange] flujos de efectivo no disponibles:", cleanError(e));
+        return 0;
+      });
 
     const resolveAsset = makeAssetResolver();
 
@@ -178,6 +202,7 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
       accountId: account.id,
       ok: true,
       importedTrades,
+      importedCashFlows,
       reconciled: adjustments.length,
     };
   } catch (e) {
@@ -191,6 +216,7 @@ export async function syncAccount(account: Account): Promise<SyncResult> {
       accountId: account.id,
       ok: false,
       importedTrades: 0,
+      importedCashFlows: 0,
       reconciled: 0,
       error,
     };

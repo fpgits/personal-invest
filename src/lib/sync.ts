@@ -34,6 +34,7 @@ export async function syncAll(): Promise<AnySyncResult[]> {
         accountId: acc.id,
         ok: false,
         importedTrades: 0,
+        importedCashFlows: 0,
         reconciled: 0,
         error: e instanceof Error ? e.message : "Error desconocido",
       });

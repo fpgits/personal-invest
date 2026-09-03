@@ -12,12 +12,18 @@ import {
 import { db } from "@/db";
 import { accounts, assets, transactions } from "@/db/schema";
 import { PeriodPicker } from "@/components/period-picker";
+import {
+  listCashFlows,
+  returnOnContributions,
+  summarizeContributions,
+  type CashFlowView,
+} from "@/lib/cashflows";
 import { periodBounds } from "@/lib/period";
 import { readPeriod } from "@/lib/period-server";
 import { computePortfolio, type Position } from "@/lib/portfolio";
 import { missingRequired } from "@/lib/setup";
 import { SetupNotice } from "@/components/setup-notice";
-import { fmtDate, fmtMoney, fmtQty } from "@/lib/utils";
+import { fmtDate, fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -143,6 +149,124 @@ function PositionSection({
   );
 }
 
+/**
+ * Aportes de capital: el efectivo real que has metido (y sacado) de cada
+ * cuenta, con su historial. El neto aportado es lo que NO cuenta como
+ * ganancia; el retorno real es el valor actual menos ese neto.
+ */
+function CashFlowCard({
+  contrib,
+  ret,
+  currentValue,
+  currency,
+  accountNames,
+  flowsInPeriod,
+  periodLabel,
+  hasAny,
+}: {
+  contrib: ReturnType<typeof summarizeContributions>;
+  ret: ReturnType<typeof returnOnContributions>;
+  currentValue: number;
+  currency: string;
+  accountNames: Map<string, string>;
+  flowsInPeriod: CashFlowView[];
+  periodLabel: string;
+  hasAny: boolean;
+}) {
+  if (!hasAny) {
+    return (
+      <Card className="mt-4">
+        <CardTitle>Aportes de capital</CardTitle>
+        <p className="text-sm text-faint">
+          Todavia no hay aportes registrados. Se rellenan solos en la proxima
+          sincronizacion: de IBKR salen de la seccion Cash Transactions de tu
+          Flex Query (activala si no la tienes), y de Binance de su historial de
+          depositos y retiros.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mt-4" padded={false}>
+      <div className="p-5 pb-3">
+        <CardTitle>Aportes de capital</CardTitle>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-xs text-faint">Capital neto aportado</p>
+            <p className="tnum text-lg font-semibold">
+              {fmtMoney(contrib.net, currency)}
+            </p>
+            <p className="text-xs text-faint">
+              {fmtMoney(contrib.deposits, currency)} en aportes
+              {contrib.withdrawals > 0 && ` · ${fmtMoney(contrib.withdrawals, currency)} retirado`}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-faint">Valor actual</p>
+            <p className="tnum text-lg font-semibold">{fmtMoney(currentValue, currency)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-faint">Retorno sobre lo aportado</p>
+            <p
+              className={`tnum text-lg font-semibold ${
+                ret.gain >= 0 ? "text-up" : "text-down"
+              }`}
+            >
+              {fmtMoney(ret.gain, currency)}
+              {ret.gainPct !== null && (
+                <span className="ml-1 text-sm font-normal">({fmtPct(ret.gainPct)})</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {contrib.byAccount.length > 1 && (
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
+            {contrib.byAccount.map((a) => (
+              <span key={a.accountId}>
+                {accountNames.get(a.accountId) ?? "Cuenta"}:{" "}
+                <b className="tnum text-text">{fmtMoney(a.net, currency)}</b>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border px-5 py-2.5 text-xs text-faint">
+        Movimientos · {periodLabel} ({flowsInPeriod.length})
+      </div>
+      {flowsInPeriod.length === 0 ? (
+        <p className="px-5 pb-5 pt-1 text-sm text-faint">
+          Sin aportes ni retiros con fecha en este periodo. El neto de arriba es
+          histórico.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-sm">
+            <tbody className="divide-y divide-border">
+              {flowsInPeriod.map((f) => (
+                <tr key={f.id} className="transition hover:bg-surface-2">
+                  <td className="px-5 py-2.5 text-xs text-faint">{fmtDate(f.occurredAt)}</td>
+                  <td className="px-3 py-2.5">
+                    <Badge tone={f.kind === "deposit" ? "up" : "down"}>
+                      {f.kind === "deposit" ? "Aporte" : "Retiro"}
+                    </Badge>
+                  </td>
+                  <td className="tnum px-3 py-2.5 text-right font-medium">
+                    {fmtMoney(f.amount, f.currency)}
+                  </td>
+                  <td className="px-5 py-2.5 text-right text-xs text-faint">{f.accountName}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default async function CarteraPage() {
   const missing = missingRequired();
   if (missing.length > 0) {
@@ -156,7 +280,7 @@ export default async function CarteraPage() {
 
   const { period } = await readPeriod();
   const { fromMs, toMs } = periodBounds(period);
-  const [portfolio, txRows] = await Promise.all([
+  const [portfolio, txRows, cashFlowsAll] = await Promise.all([
     computePortfolio(),
     db
       .select({ tx: transactions, asset: assets, account: accounts })
@@ -174,7 +298,18 @@ export default async function CarteraPage() {
       )
       .orderBy(desc(transactions.executedAt))
       .limit(200),
+    listCashFlows(),
   ]);
+
+  // Capital: el neto aportado es SIEMPRE historico (esa es la cifra que
+  // importa); la lista de movimientos se filtra al periodo elegido, como el
+  // resto de la pagina.
+  const contrib = summarizeContributions(cashFlowsAll);
+  const ret = returnOnContributions(portfolio.totalValue, contrib.net);
+  const accountNames = new Map(cashFlowsAll.map((f) => [f.accountId, f.accountName]));
+  const flowsInPeriod = cashFlowsAll.filter(
+    (f) => f.occurredAt >= fromMs && f.occurredAt <= toMs,
+  );
 
   return (
     <>
@@ -246,6 +381,17 @@ export default async function CarteraPage() {
           </ul>
         </Card>
       )}
+
+      <CashFlowCard
+        contrib={contrib}
+        ret={ret}
+        currentValue={portfolio.totalValue}
+        currency={portfolio.currency}
+        accountNames={accountNames}
+        flowsInPeriod={flowsInPeriod}
+        periodLabel={period.label}
+        hasAny={cashFlowsAll.length > 0}
+      />
 
       <Card className="mt-4" padded={false}>
         <div className="p-5 pb-3">

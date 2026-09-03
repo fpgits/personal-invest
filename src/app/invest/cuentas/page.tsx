@@ -59,6 +59,7 @@ export default function CuentasPage() {
     if (j.ok) {
       const parts = [`${j.importedTrades ?? 0} operaciones nuevas`];
       if (j.importedDividends) parts.push(`${j.importedDividends} dividendos`);
+      if (j.importedCashFlows) parts.push(`${j.importedCashFlows} aportes/retiros`);
       if (j.reconciled) parts.push(`${j.reconciled} ajustes de saldo`);
       if (j.skipped) parts.push(`${j.skipped} filas sin soporte`);
       setMessage(`Sync completo: ${parts.join(", ")}.`);

@@ -2,6 +2,7 @@ import { and, eq, like, notLike } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, transactions, type Account } from "@/db/schema";
 import { makeAssetResolver } from "@/lib/assets";
+import { flexCashFlows, upsertCashFlows } from "@/lib/cashflows";
 import { decrypt } from "@/lib/crypto";
 import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
@@ -15,6 +16,7 @@ export type BrokerSyncResult = {
   ok: boolean;
   importedTrades: number;
   importedDividends: number;
+  importedCashFlows: number;
   reconciled: number;
   skipped: number;
   ibkrAccount?: string;
@@ -39,6 +41,7 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
     ok: false,
     importedTrades: 0,
     importedDividends: 0,
+    importedCashFlows: 0,
     reconciled: 0,
     skipped: 0,
     error,
@@ -128,6 +131,14 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
         .returning({ id: transactions.id });
       importedDividends += inserted.length;
     }
+
+    /* ---------- Aportes / retiros de efectivo ---------- */
+    // Deposits/Withdrawals de la misma seccion Cash Transactions. Van a la
+    // tabla cash_flows (historial de capital), no a transactions: no son
+    // operaciones y no deben tocar el P&L. Idempotente por externalId.
+    const importedCashFlows = await upsertCashFlows(
+      flexCashFlows(statement.cash, account.id),
+    ).catch(() => 0);
 
     /* ---------- Reconciliacion contra Open Positions ---------- */
     // Se recalcula desde cero cada sync: borra ajustes anteriores.
@@ -232,6 +243,7 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
       ok: true,
       importedTrades,
       importedDividends,
+      importedCashFlows,
       reconciled: adjustments.length,
       skipped: statement.skipped.length,
       ibkrAccount: statement.accountId,

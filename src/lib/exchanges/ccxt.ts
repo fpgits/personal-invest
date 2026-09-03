@@ -154,6 +154,99 @@ export async function fetchTrades(
   return out.sort((a, b) => a.timestamp - b.timestamp);
 }
 
+export type ExchangeTransfer = {
+  /** id estable del movimiento (incluye el sentido para no colisionar). */
+  id: string;
+  kind: "deposit" | "withdrawal";
+  /** Magnitud positiva, en `currency`. */
+  amount: number;
+  currency: string;
+  occurredAt: number;
+  note?: string | null;
+};
+
+/**
+ * Depositos y retiros de EFECTIVO (fiat y stablecoins): el "cash inyectado".
+ * No incluye transferencias de cripto de inversion (mover monedas no es cash).
+ *
+ * Mejor esfuerzo: la API de muchos exchanges limita cada consulta a una
+ * ventana (~90 dias) y fiat/cripto van por endpoints distintos. Paginamos
+ * hacia atras por ventanas; en el primer sync se hace un barrido profundo y
+ * en los siguientes solo la ventana reciente (los aportes viejos ya estan
+ * guardados y el upsert es idempotente). Cualquier fallo devuelve lo que haya.
+ */
+export async function fetchCashTransfers(
+  ex: Exchange,
+  opts: { deep?: boolean } = {},
+): Promise<ExchangeTransfer[]> {
+  const out: ExchangeTransfer[] = [];
+  const seen = new Set<string>();
+  const WINDOW = 90 * 86_400_000;
+  const FLOOR = Date.parse("2019-01-01T00:00:00Z");
+  const MAX_WINDOWS = opts.deep ? 30 : 1; // profundo ≈ hasta ~7 años; incremental = 90 días
+
+  const collect = (
+    list: Array<Record<string, unknown>> | undefined,
+    kind: "deposit" | "withdrawal",
+  ) => {
+    for (const d of list ?? []) {
+      const currency = String(d.currency ?? "").toUpperCase();
+      if (!currency || !isCash(currency)) continue;
+      const amount = Math.abs(Number(d.amount ?? 0));
+      if (!(amount > 0)) continue;
+      const status = String(d.status ?? "ok").toLowerCase();
+      if (["failed", "canceled", "cancelled", "rejected", "pending"].includes(status)) continue;
+      const raw = String(d.id ?? d.txid ?? `${currency}-${d.timestamp}-${amount}`);
+      const key = `${kind}:${raw}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        id: key,
+        kind,
+        amount,
+        currency,
+        occurredAt: Number(d.timestamp ?? Date.now()),
+        note: null,
+      });
+    }
+  };
+
+  const now = Date.now();
+  for (let w = 0; w < MAX_WINDOWS; w++) {
+    const end = now - w * WINDOW;
+    const start = Math.max(FLOOR, end - WINDOW);
+    if (end <= FLOOR) break;
+    // endTime es lo que piden Binance y compañía para acotar la ventana.
+    const params = { endTime: end } as Record<string, unknown>;
+    if (ex.has["fetchDeposits"]) {
+      try {
+        collect(
+          (await ex.fetchDeposits(undefined, start, undefined, params)) as unknown as Array<
+            Record<string, unknown>
+          >,
+          "deposit",
+        );
+      } catch {
+        /* ventana sin permisos o no soportada: seguimos */
+      }
+    }
+    if (ex.has["fetchWithdrawals"]) {
+      try {
+        collect(
+          (await ex.fetchWithdrawals(undefined, start, undefined, params)) as unknown as Array<
+            Record<string, unknown>
+          >,
+          "withdrawal",
+        );
+      } catch {
+        /* idem */
+      }
+    }
+  }
+
+  return out.sort((a, b) => a.occurredAt - b.occurredAt);
+}
+
 // Efectivo: divisas y stablecoins. No son posiciones de inversion, se muestran
 // como saldo en efectivo y valen 1:1 en USD.
 const CASH = new Set([
