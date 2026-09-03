@@ -22,6 +22,8 @@ const querySchema = z.object({
   /** Periodo de revision (dias, ambos incluidos) por fecha del hecho. */
   from: isoDay.optional(),
   to: isoDay.optional(),
+  /** Grupo del activo principal: bolsa/cripto filtran; all no. */
+  group: z.enum(["all", "bolsa", "cripto"]).default("all"),
 });
 
 /** Feed de eventos y resultado de la ultima pasada (cron o manual). */
@@ -37,7 +39,7 @@ export const GET = protectedRoute(async (req) => {
   const { from, to } = parsed.data;
   const window = from && to ? periodBounds({ from, to }) : {};
   const [events, run] = await Promise.all([
-    recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit, ...window }),
+    recentEvents({ minPriority: parsed.data.min, limit: parsed.data.limit, group: parsed.data.group, ...window }),
     lastRun(),
   ]);
   const proposals = await pendingProposalsByEvent(events.map((e) => e.id));

@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
+import { GroupPicker, useGroup } from "@/components/group-picker";
 import { PeriodPicker, usePeriod } from "@/components/period-picker";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
 import type { NewsRow } from "@/db/schema";
@@ -18,10 +19,11 @@ const SENTIMENT: Record<string, { label: string; tone: "up" | "down" | "neutral"
 
 export default function NoticiasPage() {
   const { period } = usePeriod();
+  const { group } = useGroup();
   const { data, mutate, isLoading } = useSWR<{
     news: NewsRow[];
     lastError?: { at: number; message: string } | null;
-  }>(api(`/api/news?from=${period.from}&to=${period.to}`), fetcher);
+  }>(api(`/api/news?from=${period.from}&to=${period.to}&group=${group}`), fetcher);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<"all" | "high">("all");
 
@@ -42,6 +44,7 @@ export default function NoticiasPage() {
         subtitle="Titulares de tus activos, resumidos y clasificados por IA"
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <GroupPicker />
             <PeriodPicker />
             <button
               onClick={refresh}

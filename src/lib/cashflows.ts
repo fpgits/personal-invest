@@ -170,9 +170,13 @@ export async function upsertCashFlows(inputs: CashFlowInput[]): Promise<number> 
   return n;
 }
 
-export type CashFlowView = CashFlow & { accountName: string };
+export type CashFlowView = CashFlow & { accountName: string; accountType: string };
 
-/** Todos los movimientos (o los de una ventana), con el nombre de la cuenta. */
+/**
+ * Todos los movimientos (o los de una ventana), con el nombre y el tipo de la
+ * cuenta (el tipo sirve para dividir por grupo: exchange → cripto, broker →
+ * bolsa).
+ */
 export async function listCashFlows(
   window: { fromMs?: number; toMs?: number } = {},
 ): Promise<CashFlowView[]> {
@@ -180,10 +184,10 @@ export async function listCashFlows(
   if (window.fromMs !== undefined) conds.push(gte(cashFlows.occurredAt, window.fromMs));
   if (window.toMs !== undefined) conds.push(lte(cashFlows.occurredAt, window.toMs));
   const rows = await db
-    .select({ cf: cashFlows, accountName: accounts.name })
+    .select({ cf: cashFlows, accountName: accounts.name, accountType: accounts.type })
     .from(cashFlows)
     .innerJoin(accounts, eq(cashFlows.accountId, accounts.id))
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(cashFlows.occurredAt));
-  return rows.map((r) => ({ ...r.cf, accountName: r.accountName }));
+  return rows.map((r) => ({ ...r.cf, accountName: r.accountName, accountType: r.accountType }));
 }

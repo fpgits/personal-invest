@@ -11,7 +11,16 @@ import {
 } from "@/components/ui";
 import { db } from "@/db";
 import { accounts, assets, transactions } from "@/db/schema";
+import { GroupPicker } from "@/components/group-picker";
 import { PeriodPicker } from "@/components/period-picker";
+import {
+  accountGroup,
+  accountInGroup,
+  classInGroup,
+  GROUP_LABELS,
+  type GroupKey,
+} from "@/lib/group";
+import { readGroup } from "@/lib/group-server";
 import {
   listCashFlows,
   returnOnContributions,
@@ -152,24 +161,26 @@ function PositionSection({
 /**
  * Aportes de capital: el efectivo real que has metido (y sacado) de cada
  * cuenta, con su historial. El neto aportado es lo que NO cuenta como
- * ganancia; el retorno real es el valor actual menos ese neto.
+ * ganancia; el retorno real es el valor actual menos ese neto. Respeta el
+ * grupo (Todo/Bolsa/Cripto) y muestra siempre la division Bolsa/Cripto.
  */
 function CashFlowCard({
-  contrib,
-  ret,
+  flowsAll,
   currentValue,
+  group,
   currency,
-  accountNames,
-  flowsInPeriod,
+  fromMs,
+  toMs,
   periodLabel,
   hasAny,
 }: {
-  contrib: ReturnType<typeof summarizeContributions>;
-  ret: ReturnType<typeof returnOnContributions>;
+  flowsAll: CashFlowView[];
+  /** Valor actual del grupo seleccionado. */
   currentValue: number;
+  group: GroupKey;
   currency: string;
-  accountNames: Map<string, string>;
-  flowsInPeriod: CashFlowView[];
+  fromMs: number;
+  toMs: number;
   periodLabel: string;
   hasAny: boolean;
 }) {
@@ -187,19 +198,26 @@ function CashFlowCard({
     );
   }
 
+  // Neto del grupo seleccionado (para el titular) y division fija Bolsa/Cripto.
+  const sel = summarizeContributions(flowsAll.filter((f) => accountInGroup(group, f.accountType)));
+  const bolsa = summarizeContributions(flowsAll.filter((f) => accountGroup(f.accountType) === "bolsa"));
+  const cripto = summarizeContributions(flowsAll.filter((f) => accountGroup(f.accountType) === "cripto"));
+  const ret = returnOnContributions(currentValue, sel.net);
+  const flowsInPeriod = flowsAll.filter(
+    (f) => accountInGroup(group, f.accountType) && f.occurredAt >= fromMs && f.occurredAt <= toMs,
+  );
+
   return (
     <Card className="mt-4" padded={false}>
       <div className="p-5 pb-3">
-        <CardTitle>Aportes de capital</CardTitle>
+        <CardTitle>Aportes de capital{group !== "all" && ` · ${GROUP_LABELS[group]}`}</CardTitle>
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <p className="text-xs text-faint">Capital neto aportado</p>
-            <p className="tnum text-lg font-semibold">
-              {fmtMoney(contrib.net, currency)}
-            </p>
+            <p className="tnum text-lg font-semibold">{fmtMoney(sel.net, currency)}</p>
             <p className="text-xs text-faint">
-              {fmtMoney(contrib.deposits, currency)} en aportes
-              {contrib.withdrawals > 0 && ` · ${fmtMoney(contrib.withdrawals, currency)} retirado`}
+              {fmtMoney(sel.deposits, currency)} en aportes
+              {sel.withdrawals > 0 && ` · ${fmtMoney(sel.withdrawals, currency)} retirado`}
             </p>
           </div>
           <div>
@@ -208,11 +226,7 @@ function CashFlowCard({
           </div>
           <div>
             <p className="text-xs text-faint">Retorno sobre lo aportado</p>
-            <p
-              className={`tnum text-lg font-semibold ${
-                ret.gain >= 0 ? "text-up" : "text-down"
-              }`}
-            >
+            <p className={`tnum text-lg font-semibold ${ret.gain >= 0 ? "text-up" : "text-down"}`}>
               {fmtMoney(ret.gain, currency)}
               {ret.gainPct !== null && (
                 <span className="ml-1 text-sm font-normal">({fmtPct(ret.gainPct)})</span>
@@ -221,14 +235,19 @@ function CashFlowCard({
           </div>
         </div>
 
-        {contrib.byAccount.length > 1 && (
+        {/* Division Bolsa / Cripto: en la vista "Todo" (al filtrar, el titular
+            ya es de ese grupo, asi que no hace falta repetirlo). */}
+        {group === "all" && (
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
-            {contrib.byAccount.map((a) => (
-              <span key={a.accountId}>
-                {accountNames.get(a.accountId) ?? "Cuenta"}:{" "}
-                <b className="tnum text-text">{fmtMoney(a.net, currency)}</b>
-              </span>
-            ))}
+            <span>
+              Bolsa: <b className="tnum text-text">{fmtMoney(bolsa.net, currency)}</b>
+            </span>
+            <span>
+              Cripto:{" "}
+              <b className="tnum text-text">
+                {cripto.byAccount.length > 0 ? fmtMoney(cripto.net, currency) : "sin datos"}
+              </b>
+            </span>
           </div>
         )}
       </div>
@@ -278,9 +297,9 @@ export default async function CarteraPage() {
     );
   }
 
-  const { period } = await readPeriod();
+  const [{ period }, group] = await Promise.all([readPeriod(), readGroup()]);
   const { fromMs, toMs } = periodBounds(period);
-  const [portfolio, txRows, cashFlowsAll] = await Promise.all([
+  const [portfolio, txRowsAll, cashFlowsAll] = await Promise.all([
     computePortfolio(),
     db
       .select({ tx: transactions, asset: assets, account: accounts })
@@ -301,31 +320,35 @@ export default async function CarteraPage() {
     listCashFlows(),
   ]);
 
-  // Capital: el neto aportado es SIEMPRE historico (esa es la cifra que
-  // importa); la lista de movimientos se filtra al periodo elegido, como el
-  // resto de la pagina.
-  const contrib = summarizeContributions(cashFlowsAll);
-  const ret = returnOnContributions(portfolio.totalValue, contrib.net);
-  const accountNames = new Map(cashFlowsAll.map((f) => [f.accountId, f.accountName]));
-  const flowsInPeriod = cashFlowsAll.filter(
-    (f) => f.occurredAt >= fromMs && f.occurredAt <= toMs,
-  );
+  // Filtro por grupo (Todo/Bolsa/Cripto), global de la seccion.
+  const positions = portfolio.positions.filter((p) => classInGroup(group, p.group));
+  const closed = portfolio.closed.filter((p) => classInGroup(group, p.asset.assetClass));
+  const txRows = txRowsAll.filter((r) => classInGroup(group, r.asset.assetClass));
+  // Totales del grupo: si es "Todo" coinciden con los de la cartera entera.
+  const groupValue = positions.reduce((s, p) => s + p.value, 0);
+  const groupCost = positions.reduce((s, p) => s + p.costBasis, 0);
+  const groupUnrealized = positions.reduce((s, p) => s + p.unrealizedPnl, 0);
+  const groupUnrealizedPct = groupCost > 0 ? (groupUnrealized / groupCost) * 100 : 0;
 
   return (
     <>
       <PageTitle
-        subtitle={`${portfolio.positions.length} posiciones abiertas · coste medio ${
-          portfolio.currency
-        }`}
-        action={<PeriodPicker />}
+        subtitle={`${positions.length} posiciones abiertas · coste medio ${portfolio.currency}`}
+        action={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <GroupPicker />
+            <PeriodPicker />
+          </div>
+        }
       >
         Cartera
       </PageTitle>
 
-      {portfolio.positions.length === 0 ? (
+      {positions.length === 0 ? (
         <EmptyState title="No hay posiciones abiertas">
-          Conecta IBKR o Binance con claves de solo lectura en la pestana de
-          Cuentas y sincroniza. La cartera se llena sola.
+          {group === "all"
+            ? "Conecta IBKR o Binance con claves de solo lectura en la pestana de Cuentas y sincroniza. La cartera se llena sola."
+            : "Nada en este grupo. Cambia el selector de arriba a Todo para ver el resto."}
         </EmptyState>
       ) : (
         <>
@@ -333,11 +356,11 @@ export default async function CarteraPage() {
             <span className="text-sm text-muted">Valor total</span>
             <div className="flex items-baseline gap-3">
               <span className="tnum text-base font-semibold">
-                {fmtMoney(portfolio.totalValue, portfolio.currency)}
+                {fmtMoney(groupValue, portfolio.currency)}
               </span>
               <Delta
-                value={portfolio.unrealizedPnl}
-                pct={portfolio.unrealizedPct}
+                value={groupUnrealized}
+                pct={groupUnrealizedPct}
                 currency={portfolio.currency}
               />
             </div>
@@ -347,19 +370,17 @@ export default async function CarteraPage() {
               key={s.label}
               label={s.label}
               currency={portfolio.currency}
-              positions={portfolio.positions.filter((p) =>
-                s.groups.includes(p.group),
-              )}
+              positions={positions.filter((p) => s.groups.includes(p.group))}
             />
           ))}
         </>
       )}
 
-      {portfolio.closed.length > 0 && (
+      {closed.length > 0 && (
         <Card className="mt-4">
           <CardTitle>Posiciones cerradas</CardTitle>
           <ul className="divide-y divide-border">
-            {portfolio.closed.map((p) => (
+            {closed.map((p) => (
               <li
                 key={p.asset.id}
                 className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
@@ -383,12 +404,12 @@ export default async function CarteraPage() {
       )}
 
       <CashFlowCard
-        contrib={contrib}
-        ret={ret}
-        currentValue={portfolio.totalValue}
+        flowsAll={cashFlowsAll}
+        currentValue={groupValue}
+        group={group}
         currency={portfolio.currency}
-        accountNames={accountNames}
-        flowsInPeriod={flowsInPeriod}
+        fromMs={fromMs}
+        toMs={toMs}
         periodLabel={period.label}
         hasAny={cashFlowsAll.length > 0}
       />

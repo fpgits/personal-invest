@@ -4,6 +4,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { useState } from "react";
 import { ExternalLink, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { GroupPicker, useGroup } from "@/components/group-picker";
 import { PeriodPicker, usePeriod } from "@/components/period-picker";
 import { Badge, Card, EmptyState, PageTitle } from "@/components/ui";
 import type { CalibrationReport } from "@/lib/intel/calibration";
@@ -76,11 +77,12 @@ const FEEDBACK: Array<{ id: Feedback; label: string }> = [
 export default function AlertasPage() {
   const [filter, setFilter] = useState<Filter>("signals");
   const { period } = usePeriod();
+  const { group } = useGroup();
   const min = FILTERS.find((f) => f.id === filter)!.min;
   const { data, error, mutate, isLoading } = useSWR<{
     events: Array<EventWithSources & { proposalId: string | null }>;
     lastRun: RunStats | null;
-  }>(api(`/api/events?min=${min}&from=${period.from}&to=${period.to}`), fetcher);
+  }>(api(`/api/events?min=${min}&from=${period.from}&to=${period.to}&group=${group}`), fetcher);
   const [showCalibration, setShowCalibration] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -121,6 +123,7 @@ export default function AlertasPage() {
         subtitle="Hechos que pueden mover una tesis. Hecho, inferencia y evaluacion, por separado y con fuentes."
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <GroupPicker />
             <PeriodPicker />
             <button
               onClick={runNow}

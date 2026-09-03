@@ -14,6 +14,7 @@ import {
 import { isBudgetError } from "@/lib/ai/errors";
 import { listAssets } from "@/lib/assets";
 import { fundamentalsToText, getFundamentalsMap } from "@/lib/fundamentals";
+import { GROUP_CLASSES, type GroupKey } from "@/lib/period-metrics";
 import { computePortfolio } from "@/lib/portfolio";
 import { getSetting, setSetting } from "@/lib/settings";
 import { proposeFromEvent } from "@/lib/thesis";
@@ -428,6 +429,8 @@ export async function recentEvents(opts: {
   /** Ventana por fecha del hecho (occurredAt), en ms. */
   fromMs?: number;
   toMs?: number;
+  /** Grupo del activo principal: bolsa/cripto filtran; "all" no. */
+  group?: GroupKey;
 } = {}): Promise<EventWithSources[]> {
   const limit = clampInt(opts.limit, 1, 200, 50);
   const allowed = PRIORITIES.slice(0, PRIORITIES.indexOf(opts.minPriority ?? "P4") + 1);
@@ -437,6 +440,17 @@ export async function recentEvents(opts: {
   const conds = [inArray(events.priority, [...allowed])];
   if (opts.fromMs !== undefined) conds.push(gte(events.occurredAt, opts.fromMs));
   if (opts.toMs !== undefined) conds.push(lte(events.occurredAt, opts.toMs));
+  // Filtro por grupo: solo eventos cuyo activo principal es de ese grupo. Los
+  // eventos sin activo principal (macro) quedan fuera salvo en "Todo".
+  const classes = opts.group && opts.group !== "all" ? GROUP_CLASSES[opts.group] : null;
+  if (classes) {
+    conds.push(
+      inArray(
+        events.primaryAssetId,
+        db.select({ id: assets.id }).from(assets).where(inArray(assets.assetClass, classes)),
+      ),
+    );
+  }
   const rows = await db
     .select()
     .from(events)

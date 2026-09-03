@@ -1,10 +1,11 @@
 import { and, desc, gt, gte, inArray, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { news, type Asset, type NewsRow } from "@/db/schema";
+import { assets, news, type Asset, type NewsRow } from "@/db/schema";
 import { aiObject } from "./ai/client";
 import { classifyError, messageOf, type FailureKind } from "./ai/errors";
 import { NEWS_SYSTEM } from "./ai/prompts";
+import { GROUP_CLASSES, type GroupKey } from "./period-metrics";
 import { listAssets } from "./assets";
 import { finnhub, getNewsFor } from "./market";
 import type { NewsItem } from "./market/types";
@@ -262,17 +263,51 @@ export async function newsLastError(): Promise<{ at: number; message: string } |
   }
 }
 
+/** Simbolos de los activos de un grupo (para filtrar noticias por sus tickers). */
+async function symbolsInGroup(group: GroupKey): Promise<Set<string>> {
+  const classes = GROUP_CLASSES[group];
+  if (!classes) return new Set();
+  const rows = await db
+    .select({ symbol: assets.symbol })
+    .from(assets)
+    .where(inArray(assets.assetClass, classes));
+  return new Set(rows.map((r) => r.symbol.toUpperCase()));
+}
+
 export async function recentNews(
   limit = 50,
   window: { fromMs?: number; toMs?: number } = {},
+  group: GroupKey = "all",
 ): Promise<NewsRow[]> {
   const conds = [];
   if (window.fromMs !== undefined) conds.push(gte(news.publishedAt, window.fromMs));
   if (window.toMs !== undefined) conds.push(lte(news.publishedAt, window.toMs));
-  return db
+
+  // "Todo" no filtra. Para un grupo, la noticia entra si alguno de sus tickers
+  // pertenece a ese grupo. Los tickers son JSON, asi que se filtra en memoria:
+  // se pide un cupo mayor y se recorta despues.
+  if (group === "all") {
+    return db
+      .select()
+      .from(news)
+      .where(conds.length > 0 ? and(...conds) : undefined)
+      .orderBy(desc(news.publishedAt))
+      .limit(limit);
+  }
+
+  const syms = await symbolsInGroup(group);
+  const rows = await db
     .select()
     .from(news)
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(news.publishedAt))
-    .limit(limit);
+    .limit(Math.max(limit, 500));
+  const filtered = rows.filter((n) => {
+    try {
+      return (JSON.parse(n.tickers) as string[]).some((t) => syms.has(String(t).toUpperCase()));
+    } catch {
+      return false;
+    }
+  });
+  return filtered.slice(0, limit);
 }

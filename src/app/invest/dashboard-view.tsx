@@ -7,6 +7,7 @@ import { ArrowUpRight } from "lucide-react";
 import { AllocationBar, PortfolioChart, WeightBars, type ChartMode } from "@/components/charts";
 import { CLASS_LABELS, classColor } from "@/lib/colors";
 import { AssetIcon, Card, CardTitle, Delta, Stat } from "@/components/ui";
+import { useGroup } from "@/components/group-picker";
 import { usePeriod } from "@/components/period-picker";
 import { fmtDay, serializeSpec, type PeriodSpec } from "@/lib/period";
 import type { DashboardPeriod, GroupKey, PeriodMetrics } from "@/lib/period-metrics";
@@ -71,7 +72,9 @@ export function DashboardView({
   initialSpec: PeriodSpec;
   slices: ClassBreakdown[];
 }) {
-  const [sel, setSel] = useState<GroupKey>("all");
+  // El grupo (Todo/Bolsa/Cripto) es global y vive junto al selector de periodo
+  // en la cabecera; aqui solo se lee.
+  const { group: sel } = useGroup();
 
   // Las metricas del periodo van por SWR con una clave que ES el periodo
   // elegido: lo que se ve corresponde siempre a lo que marca el selector, y
@@ -95,18 +98,9 @@ export function DashboardView({
   // invertido. El valor total sube con cada deposito y eso no es rentabilidad.
   const [chartMode, setChartMode] = useState<ChartMode>("result");
 
-  // Solo mostramos las pestanas de clases que existen en la cartera.
-  const tabs = useMemo(
-    () =>
-      GROUPS.filter(
-        (g) =>
-          g.classes === null ||
-          positions.some((p) => g.classes!.includes(p.group)),
-      ),
-    [positions],
-  );
-
-  const group = tabs.find((g) => g.key === sel) ?? tabs[0];
+  // El grupo lo fija el selector global de la cabecera (honra la eleccion
+  // aunque esa clase este vacia: se vera "nada en esta clase").
+  const group = GROUPS.find((g) => g.key === sel) ?? GROUPS[0];
   const inGroup = (p: Position) =>
     !group.classes || group.classes.includes(p.group);
   const isAll = group.key === "all";
@@ -180,32 +174,6 @@ export function DashboardView({
 
   return (
     <>
-      <div
-        className="mt-4 inline-flex flex-wrap gap-1 rounded-lg border border-border bg-surface p-1"
-        role="tablist"
-        aria-label="Filtrar por clase"
-      >
-        {tabs.map((g) => {
-          const active = g.key === group.key;
-          return (
-            <button
-              key={g.key}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setSel(g.key)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                active
-                  ? "bg-accent text-white"
-                  : "text-muted hover:bg-surface-2 hover:text-text"
-              }`}
-            >
-              {g.key === "all" ? "Todo" : CLASS_LABELS[g.classes![0]] ?? g.label}
-            </button>
-          );
-        })}
-      </div>
-
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Valor total"

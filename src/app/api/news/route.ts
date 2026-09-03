@@ -1,5 +1,6 @@
 import { protectedRoute } from "@/lib/api";
 import { ingestFilings } from "@/lib/edgar";
+import { parseGroup } from "@/lib/group";
 import { ingestNews, newsLastError, processNews, recentNews } from "@/lib/news";
 import { periodBounds } from "@/lib/period";
 
@@ -16,7 +17,8 @@ export const GET = protectedRoute(async (req) => {
   const from = params.get("from");
   const to = params.get("to");
   const window = from && to && ISO_DAY.test(from) && ISO_DAY.test(to) ? periodBounds({ from, to }) : {};
-  const [items, lastError] = await Promise.all([recentNews(safe, window), newsLastError()]);
+  const group = parseGroup(params.get("group"));
+  const [items, lastError] = await Promise.all([recentNews(safe, window, group), newsLastError()]);
   return Response.json({ news: items, lastError });
 });
 

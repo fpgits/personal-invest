@@ -2,6 +2,7 @@ import Link from "next/link";
 import { RefreshCw } from "lucide-react";
 import { SetupNotice } from "@/components/setup-notice";
 import { Badge, EmptyState, PageTitle } from "@/components/ui";
+import { GroupPicker } from "@/components/group-picker";
 import { PeriodPicker } from "@/components/period-picker";
 import { dashboardPeriod } from "@/lib/period-metrics";
 import { readPeriod } from "@/lib/period-server";
@@ -75,6 +76,7 @@ export default async function DashboardPage() {
                 Algun precio desactualizado
               </Badge>
             )}
+            <GroupPicker />
             <PeriodPicker />
           </div>
         }
