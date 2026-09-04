@@ -141,7 +141,12 @@ export async function modelFor(purpose: AiPurpose, tier = AI_POLICY[purpose].tie
   const entry = await catalogEntry(modelId);
 
   const settings: OpenRouterChatSettings = { usage: { include: true } };
-  if (policy.reasoning && entry?.reasoning) {
+  if (policy.reasoning === "none") {
+    // Apagarlo explicitamente, sepamos o no del catalogo: un modelo que razona
+    // por defecto (DeepSeek) tarda 40s+ en una tarea mecanica. `enabled:false`
+    // via extraBody porque el tipo de `reasoning` exige effort/max_tokens.
+    settings.extraBody = { ...(settings.extraBody ?? {}), reasoning: { enabled: false } };
+  } else if (policy.reasoning && entry?.reasoning) {
     settings.reasoning = { effort: policy.reasoning, exclude: true };
   }
   if (policy.background) settings.provider = { sort: "price" };

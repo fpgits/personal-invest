@@ -22,8 +22,13 @@ export const AI_PURPOSES = [
 ] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 
-/** Esfuerzo de razonamiento que se pide a OpenRouter (se ignora si el modelo no razona). */
-export type ReasoningEffort = "low" | "medium" | "high";
+/**
+ * Esfuerzo de razonamiento que se pide a OpenRouter. "none" lo apaga
+ * explicitamente: tareas mecanicas (resumir titulares, agrupar) no lo
+ * necesitan, y un modelo que razona por defecto (p. ej. DeepSeek) se dispara
+ * a 40s+ y revienta el timeout. "low"/"medium"/"high" solo donde aporta.
+ */
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type PurposePolicy = {
   label: string;
@@ -51,8 +56,10 @@ export const AI_POLICY: Record<AiPurpose, PurposePolicy> = {
     label: "Resumen de noticias",
     tier: "fast",
     maxOutputTokens: 2000,
-    timeoutMs: 45_000,
-    reasoning: "low",
+    // Sin razonamiento: resumir titulares es mecanico. Con razonamiento,
+    // DeepSeek-flash gastaba ~1400 tokens y tardaba 40-45s (timeouts).
+    timeoutMs: 60_000,
+    reasoning: "none",
     background: true,
   },
   merge: {
@@ -60,7 +67,7 @@ export const AI_POLICY: Record<AiPurpose, PurposePolicy> = {
     tier: "fast",
     maxOutputTokens: 800,
     timeoutMs: 30_000,
-    reasoning: "low",
+    reasoning: "none",
     background: true,
   },
   extract: {

@@ -61,7 +61,12 @@ console.log("\n# Politica por proposito");
   }
   const background = AI_PURPOSES.filter((p) => AI_POLICY[p].background);
   eq(background, ["news_summary", "merge", "extract", "thesis_check"], "solo las tareas de cron respetan presupuesto");
-  truthy(background.every((p) => AI_POLICY[p].reasoning), "las tareas de fondo llevan esfuerzo de razonamiento acotado");
+  // Tareas mecanicas: razonamiento apagado (si no, DeepSeek se va a 40s+).
+  eq(AI_POLICY.news_summary.reasoning, "none", "el resumen de noticias no razona");
+  eq(AI_POLICY.merge.reasoning, "none", "la agrupacion no razona");
+  // Donde aporta, razonamiento acotado a medium.
+  eq(AI_POLICY.extract.reasoning, "medium", "la extraccion razona (medium)");
+  eq(AI_POLICY.thesis_check.reasoning, "medium", "el contraste de tesis razona (medium)");
   truthy(
     AI_PURPOSES.filter((p) => !AI_POLICY[p].background).every((p) => !AI_POLICY[p].reasoning),
     "las llamadas interactivas dejan el razonamiento al modelo",
