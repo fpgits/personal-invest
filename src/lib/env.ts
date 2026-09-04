@@ -46,6 +46,10 @@ export const env = {
   get coingeckoKey() {
     return opt("COINGECKO_API_KEY");
   },
+  /** Datos macro de la Reserva Federal (FRED). Sin clave, el panel macro se oculta. */
+  get fredKey() {
+    return opt("FRED_API_KEY");
+  },
   /** Alternativa simple: la contrasena tal cual en AUTH_PASSWORD. */
   get authPassword() {
     return opt("AUTH_PASSWORD");

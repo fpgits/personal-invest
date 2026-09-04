@@ -1,6 +1,7 @@
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import { news, theses } from "@/db/schema";
+import { getMacro, macroToText } from "@/lib/macro";
 import { computePortfolio, type PortfolioSummary } from "@/lib/portfolio";
 import { fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
 import { CHAT_LIMITS } from "./policy";
@@ -96,13 +97,17 @@ export async function cachedFullContext(ttlMs = CHAT_LIMITS.contextTtlMs): Promi
 
 /** Contexto extra: tesis guardadas y noticias recientes. */
 export async function buildFullContext(): Promise<string> {
-  const [p, thesisRows, newsRows] = await Promise.all([
+  const [p, thesisRows, newsRows, macro] = await Promise.all([
     computePortfolio(),
     db.select().from(theses).limit(30),
     db.select().from(news).orderBy(desc(news.publishedAt)).limit(20),
+    getMacro().catch(() => null),
   ]);
 
   const parts = ["## Estado de la cartera", portfolioToText(p)];
+
+  const macroLine = macro ? macroToText(macro) : "";
+  if (macroLine) parts.push(`## Macro\n${macroLine}`);
 
   if (thesisRows.length > 0) {
     parts.push("## Tesis guardadas");

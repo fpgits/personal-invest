@@ -23,7 +23,8 @@
     "test:ai": "tsx scripts/test-ai.ts",
     "test:cashflows": "tsx scripts/test-cashflows.ts",
     "test:group": "tsx scripts/test-group.ts",
-    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:ai && npm run test:cashflows && npm run test:group && npm run test:intel:db"
+    "test:macro": "tsx scripts/test-macro.ts",
+    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:ai && npm run test:cashflows && npm run test:group && npm run test:macro && npm run test:intel:db"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

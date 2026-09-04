@@ -3,7 +3,9 @@ import { RefreshCw } from "lucide-react";
 import { SetupNotice } from "@/components/setup-notice";
 import { Badge, EmptyState, PageTitle } from "@/components/ui";
 import { GroupPicker } from "@/components/group-picker";
+import { MacroStrip } from "@/components/macro-strip";
 import { PeriodPicker } from "@/components/period-picker";
+import { getMacro } from "@/lib/macro";
 import { dashboardPeriod } from "@/lib/period-metrics";
 import { readPeriod } from "@/lib/period-server";
 import { computePortfolio } from "@/lib/portfolio";
@@ -51,11 +53,15 @@ export default async function DashboardPage() {
   }
 
   // El periodo se calcula con los snapshots; si falla, el Resumen sigue
-  // funcionando sin la parte de periodo.
-  const periodData = await dashboardPeriod(period, portfolio, spec.today).catch((e: unknown) => {
-    console.error("[resumen] periodo:", e instanceof Error ? e.message : String(e));
-    return null;
-  });
+  // funcionando sin la parte de periodo. El macro es contexto y no debe
+  // tumbar la pagina si FRED no responde.
+  const [periodData, macro] = await Promise.all([
+    dashboardPeriod(period, portfolio, spec.today).catch((e: unknown) => {
+      console.error("[resumen] periodo:", e instanceof Error ? e.message : String(e));
+      return null;
+    }),
+    getMacro().catch(() => null),
+  ]);
 
   const lastUpdate = Math.max(
     0,
@@ -83,6 +89,8 @@ export default async function DashboardPage() {
       >
         Resumen
       </PageTitle>
+
+      {macro && <MacroStrip macro={macro} />}
 
       <DashboardView
         positions={portfolio.positions}

@@ -64,6 +64,7 @@ pantalla diciendo exactamente que falta.
 | `SEC_CONTACT_EMAIL` | no | Tu email, para el User-Agent que exige la SEC. Sin esto no se leen filings ni 13F de EDGAR |
 | `OPENFIGI_API_KEY` | no | openfigi.com/api. Opcional: sube el limite de CUSIP → ticker de 25 a 250 req/min (Inversores) |
 | `COINGECKO_API_KEY` | no | Opcional, sube el limite de 5-15 a 30 req/min |
+| `FRED_API_KEY` | no | fredaccount.stlouisfed.org/apikey. Contexto macro (tipos, inflacion, desempleo) y tipo libre de riesgo. Sin clave, el panel macro no aparece |
 | `CRON_SECRET` | no | `openssl rand -hex 32`. Vercel lo manda como `Authorization: Bearer` |
 
 `ENCRYPTION_KEY` cifra las API keys de los exchanges. **Si la cambias, las
@@ -189,6 +190,8 @@ npm run test:period    # periodo de revision y metricas por periodo
 npm run test:history   # reconstruccion del historico (Stooq, CoinGecko, Equity Summary)
 npm run test:ai        # politica de IA: presupuesto, contabilidad, recorte de contexto
 npm run test:cashflows # aportes de capital: extraccion, neto aportado, retorno
+npm run test:group     # filtro por grupo (bolsa/cripto/todo)
+npm run test:macro     # contexto macro de FRED (parseo, curva, texto para IA)
 npm run test:intel:db  # motor + tesis contra SQLite local
 ```
 
@@ -380,7 +383,8 @@ src/
     cashflows.ts  aportes/retiros de efectivo: extraccion (IBKR/exchange), neto aportado, retorno
     period.ts     periodo de revision (presets, comparacion, cookie) y period-metrics.ts (resultado por periodo)
     history.ts    reconstruccion del historico con cierres diarios (market/stooq.ts, CoinGecko) y Equity Summary de IBKR
-    market/       finnhub.ts, coingecko.ts y el router entre ambos
+    market/       finnhub.ts, coingecko.ts, fred.ts (macro) y el router entre ambos
+    macro.ts      contexto macro de FRED: tipos, inflacion, desempleo, curva 10-2 y tipo libre de riesgo
     sync.ts       enruta cada cuenta a su integracion
     exchanges/    ccxt.ts (conexion) y sync.ts (cripto)
     brokers/      ibkr.ts (Flex Web Service) y sync.ts (bolsa)
