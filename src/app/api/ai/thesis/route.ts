@@ -6,6 +6,8 @@ import { aiText } from "@/lib/ai/client";
 import { THESIS_SYSTEM } from "@/lib/ai/prompts";
 import { ok, parseBody, protectedRoute } from "@/lib/api";
 import { ensureAsset } from "@/lib/assets";
+import { loadCikMap } from "@/lib/edgar";
+import { companyFinancials, financialsToText } from "@/lib/edgar-facts";
 import { computePortfolio } from "@/lib/portfolio";
 import { fmtMoney, fmtPct, fmtQty, id } from "@/lib/utils";
 
@@ -53,9 +55,25 @@ export const POST = protectedRoute(async (req) => {
       ].join("\n")
     : `Fernando no tiene posicion abierta en ${asset.symbol}.`;
 
+  // Fundamentales de la fuente primaria (SEC EDGAR): anclan la tesis a las
+  // cifras que la empresa declara, no a lo que el modelo recuerde. Solo bolsa,
+  // y nunca tumba la generacion si EDGAR no responde.
+  let fundamentals = "";
+  if (asset.assetClass !== "crypto") {
+    const cik =
+      asset.cik ??
+      (await loadCikMap()
+        .then((m) => m.get((asset.providerId || asset.symbol).toUpperCase()) ?? null)
+        .catch(() => null));
+    if (cik) {
+      const fin = await companyFinancials(cik).catch(() => null);
+      if (fin?.available) fundamentals = `\n\n${financialsToText(fin)}`;
+    }
+  }
+
   const { text, modelId } = await aiText("thesis_text", {
     system: THESIS_SYSTEM,
-    prompt: `Activo: ${asset.symbol} (${asset.name}), clase ${asset.assetClass}.\n\n${position}`,
+    prompt: `Activo: ${asset.symbol} (${asset.name}), clase ${asset.assetClass}.\n\n${position}${fundamentals}`,
     temperature: 0.5,
   });
 

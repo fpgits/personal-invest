@@ -192,6 +192,7 @@ npm run test:ai        # politica de IA: presupuesto, contabilidad, recorte de c
 npm run test:cashflows # aportes de capital: extraccion, neto aportado, retorno
 npm run test:group     # filtro por grupo (bolsa/cripto/todo)
 npm run test:macro     # contexto macro de FRED (parseo, curva, texto para IA)
+npm run test:edgar-facts # fundamentales de EDGAR (XBRL anual, multiplos, texto)
 npm run test:intel:db  # motor + tesis contra SQLite local
 ```
 
@@ -313,6 +314,13 @@ El catalogo de OpenRouter cambia cada semana, asi que no hay modelos
 hardcodeados: `/ajustes` lee la lista en vivo y guarda tu eleccion en la base de
 datos.
 
+El analisis va anclado a datos primarios, no a lo que el modelo recuerde: al
+generar una tesis se le inyectan los fundamentales historicos de **SEC EDGAR**
+(XBRL companyfacts: ingresos, beneficio, margen y BPA por ejercicio, con los
+multiplos calculados contra el precio actual — ver `edgar-facts.ts`), y el chat
+recibe el **contexto macro de FRED** (tipos, curva 10-2, inflacion). EDGAR no
+necesita clave, solo `SEC_CONTACT_EMAIL` en el User-Agent.
+
 ### Coste y control de gasto
 
 Toda llamada a OpenRouter pasa por una sola puerta (`src/lib/ai/client.ts`:
@@ -392,6 +400,7 @@ src/
     intel/        motor de inteligencia: sources, dedup, extract, score, run, calibration
     thesis.ts     tesis estructurada: supuestos, propuestas desde eventos, historial
     edgar.ts      SEC EDGAR: CIK, filings, texto de 8-K/10-Q
+    edgar-facts.ts  fundamentales historicos de EDGAR (XBRL companyfacts): ingresos, beneficio, margen, BPA, multiplos
     managers.ts   inversores seguidos: 13F de EDGAR, diff trimestral, eventos tier 1
     fundamentals.ts  ratios y resultados de Finnhub
     crypto.ts     AES-256-GCM para las API keys, scrypt para la contrasena

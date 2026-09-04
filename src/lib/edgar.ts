@@ -216,7 +216,7 @@ function userAgent(): string {
   return `personal-invest/1.0 (${contact})`;
 }
 
-async function secFetch(url: string): Promise<Response> {
+export async function secFetch(url: string): Promise<Response> {
   const res = await fetch(url, {
     headers: { "User-Agent": userAgent(), Accept: "application/json, text/html;q=0.9, */*;q=0.5" },
     cache: "no-store",
