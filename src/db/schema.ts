@@ -416,6 +416,47 @@ export const convictionCalls = sqliteTable(
   ],
 );
 
+/**
+ * Operaciones de insiders (Form 4 de EDGAR): compras y ventas de directivos y
+ * consejeros con su propio dinero. Se guardan una a una para poder agregar
+ * por ventana (compra agrupada de varios insiders) y no duplicar al reingerir.
+ */
+export const insiderTransactions = sqliteTable(
+  "insider_transactions",
+  {
+    id: text("id").primaryKey(),
+    assetId: text("asset_id").references(() => assets.id, { onDelete: "cascade" }),
+    cik: text("cik").notNull(),
+    symbol: text("symbol").notNull(),
+    accession: text("accession").notNull(),
+    /** Posicion de la operacion dentro del Form 4. */
+    txIndex: integer("tx_index").notNull(),
+    ownerName: text("owner_name").notNull(),
+    /** director | officer | ten_percent | other */
+    ownerRole: text("owner_role").notNull(),
+    officerTitle: text("officer_title"),
+    /** Codigo SEC: P compra en mercado, S venta, A concesion, M ejercicio, F retencion fiscal, G regalo... */
+    code: text("code").notNull(),
+    /** true = adquirido (A), false = dispuesto (D). */
+    acquired: integer("acquired", { mode: "boolean" }).notNull(),
+    shares: real("shares").notNull(),
+    price: real("price"),
+    /** shares * price, en USD. */
+    value: real("value"),
+    postShares: real("post_shares"),
+    /** Operacion bajo plan 10b5-1 preprogramado (menos senal). */
+    planned: integer("planned", { mode: "boolean" }).notNull().default(false),
+    transactionAt: integer("transaction_at").notNull(),
+    filedAt: integer("filed_at").notNull(),
+    url: text("url").notNull(),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("insider_tx_accession_idx").on(t.accession, t.txIndex),
+    index("insider_tx_symbol_idx").on(t.symbol, t.transactionAt),
+  ],
+);
+
 /** CUSIP → ticker (OpenFIGI), cacheado para no repetir consultas. */
 export const cusipMap = sqliteTable("cusip_map", {
   cusip: text("cusip").primaryKey(),
@@ -620,3 +661,4 @@ export type ManagerHolding = typeof managerHoldings.$inferSelect;
 export type AiCall = typeof aiCalls.$inferSelect;
 export type CashFlow = typeof cashFlows.$inferSelect;
 export type ConvictionCall = typeof convictionCalls.$inferSelect;
+export type InsiderTransaction = typeof insiderTransactions.$inferSelect;

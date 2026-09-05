@@ -17,27 +17,36 @@ import { id } from "./utils";
 
 const TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 const SUBMISSIONS_URL = (cik: string) => `https://data.sec.gov/submissions/CIK${cik}.json`;
-const ARCHIVE_URL = (cikNum: string, accNoDashes: string) =>
+export const ARCHIVE_URL = (cikNum: string, accNoDashes: string) =>
   `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoDashes}`;
 
 export const EDGAR_LIMITS = {
   /** Filings mas viejos que esto no se ingieren: llegarian tarde. */
   maxAgeDays: 14,
   /** Documentos que se descargan por pasada (cada uno son 1-3 peticiones). */
-  docsPerRun: 8,
+  docsPerRun: 12,
   /** Texto maximo que se guarda por filing. */
   bodyChars: 20_000,
   /** Pausa entre peticiones a la SEC. */
   pauseMs: 150,
 } as const;
 
-/** Formularios que interesan y su impacto por defecto (el 8-K depende de sus items). */
+/**
+ * Formularios que interesan y su impacto por defecto (el 8-K depende de sus
+ * items). Los 13D/13G los presenta un tercero (el accionista) pero aparecen en
+ * el historial del emisor: un 13D declara >5% con intencion de influir
+ * (activista); un 13G, >5% pasivo; las enmiendas (/A) suelen ser cambios de
+ * porcentaje.
+ */
 export const FORM_IMPACT: Record<string, "high" | "medium"> = {
   "10-K": "high",
   "10-Q": "high",
   "20-F": "high",
   "6-K": "medium",
   "SC 13D": "high",
+  "SC 13D/A": "medium",
+  "SC 13G": "medium",
+  "SC 13G/A": "medium",
   "8-K": "medium",
   "8-K/A": "medium",
   "10-K/A": "medium",
@@ -113,7 +122,13 @@ function formLabel(form: string): string {
     case "6-K":
       return "Comunicacion de emisor extranjero (6-K)";
     case "SC 13D":
-      return "Participacion significativa con intencion (SC 13D)";
+      return "Participacion >5% con intencion de influir (SC 13D, activista)";
+    case "SC 13D/A":
+      return "Cambio en participacion activista (SC 13D/A)";
+    case "SC 13G":
+      return "Participacion pasiva >5% (SC 13G)";
+    case "SC 13G/A":
+      return "Cambio en participacion pasiva >5% (SC 13G/A)";
     default:
       return form;
   }
@@ -168,6 +183,7 @@ export function parseSubmissions(
   json: unknown,
   cik: string,
   sinceMs: number,
+  allow: (form: string) => boolean = (form) => Boolean(FORM_IMPACT[form]),
 ): Filing[] {
   const recent = (json as { filings?: { recent?: Record<string, unknown[]> } })?.filings?.recent;
   if (!recent) return [];
@@ -182,7 +198,7 @@ export function parseSubmissions(
   const out: Filing[] = [];
   for (let i = 0; i < forms.length; i++) {
     const form = forms[i];
-    if (!FORM_IMPACT[form]) continue;
+    if (!allow(form)) continue;
     const filedAt = Date.parse(`${dates[i]}T12:00:00Z`);
     if (!Number.isFinite(filedAt) || filedAt < sinceMs) continue;
     const accession = accs[i];
@@ -261,9 +277,13 @@ export async function ensureCiks(candidates: Asset[]): Promise<Asset[]> {
   return equities.filter((a) => a.cik);
 }
 
-export async function recentFilings(cik: string, sinceMs: number): Promise<Filing[]> {
+export async function recentFilings(
+  cik: string,
+  sinceMs: number,
+  allow?: (form: string) => boolean,
+): Promise<Filing[]> {
   const json = await (await secFetch(SUBMISSIONS_URL(cik))).json();
-  return parseSubmissions(json, cik, sinceMs);
+  return parseSubmissions(json, cik, sinceMs, allow);
 }
 
 /**
@@ -357,9 +377,13 @@ export async function ingestFilings(candidates?: Asset[]): Promise<IngestFilings
         .where(inArray(news.url, pending.map((p) => p.filing.url)))
     ).map((r) => r.url),
   );
+  // Primero lo de mas impacto, y dentro de cada nivel lo mas reciente: una
+  // rafaga de 13G/A (cada fondo enmienda en febrero) no debe desplazar a un
+  // 8-K de resultados.
+  const rank = { high: 0, medium: 1, low: 2 } as const;
   const fresh = pending
     .filter((p) => !known.has(p.filing.url))
-    .sort((a, b) => b.filing.filedAt - a.filing.filedAt)
+    .sort((a, b) => rank[a.cls.impact] - rank[b.cls.impact] || b.filing.filedAt - a.filing.filedAt)
     .slice(0, EDGAR_LIMITS.docsPerRun);
 
   for (const { asset, filing, cls } of fresh) {

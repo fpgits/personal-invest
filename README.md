@@ -276,11 +276,11 @@ Definidos en `vercel.json`. Necesitan `CRON_SECRET` o devuelven 401.
 | `/api/cron/prices` | cada 15 min, 13-21h L-V | Refresca precios (horario de mercado US en UTC) |
 | `/api/cron/sync` | cada 6 h | Sincroniza los exchanges conectados |
 | `/api/cron/snapshot` | 22:05 diario | Guarda la foto del dia. **Sin esto no hay grafico historico** |
-| `/api/cron/news` | cada 4 h | Titulares (Finnhub) + filings (SEC EDGAR), y resumen con el modelo rapido |
-| `/api/cron/events` | cada 4 h, a y media | Convierte noticias en eventos con score y prioridad, y propone cambios de tesis (ver `docs/INTEL-ARCHITECTURE.md`) |
+| `/api/cron/news` | 11:00 y 23:00 UTC (antes de la apertura y tras el cierre de EE. UU.) | Titulares (Finnhub) + filings (SEC EDGAR), y resumen con el modelo rapido |
+| `/api/cron/events` | 11:30 y 23:30 UTC | Convierte noticias en eventos con score y prioridad, y propone cambios de tesis (ver `docs/INTEL-ARCHITECTURE.md`) |
 | `/api/cron/fundamentals` | 06:45 diario | Fundamentales basicos de las acciones (Finnhub) y 13F nuevos de los gestores seguidos (SEC EDGAR) |
 
-Estos horarios (cada 15 min, cada 4h, cada 6h) requieren el plan Pro de
+Estos horarios (cada 15 min, dos veces al dia, cada 6h) requieren el plan Pro de
 Vercel. En Hobby, cualquier cron mas frecuente que diario hace fallar el
 deploy; si algun dia bajas a Hobby, deja los cuatro pero en version diaria.
 
@@ -354,7 +354,7 @@ tesis que pides a mano nunca se bloquean.
 
 **Ahorro estructural**, ademas de los topes: el resumen de noticias solo
 reintenta lo que fallo una vez al dia y mientras es reciente (antes reenviaba
-todo cada 4 h con dos modelos); un fallo transitorio no se reintenta con el
+todo dos veces al dia con dos modelos); un fallo transitorio no se reintenta con el
 modelo caro; el contexto del chat se cachea 10 min y se marca con
 `cache_control` para que los proveedores con cache de prompt lo cobren a
 fraccion de precio; el historial del chat se acota a ~16k caracteres; y el

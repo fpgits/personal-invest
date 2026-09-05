@@ -78,6 +78,13 @@
       "when": 1788577112345,
       "tag": "0010_conviction_calls",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788619346362,
+      "tag": "0011_insider_transactions",
+      "breakpoints": true
     }
   ]
 }

@@ -173,7 +173,10 @@ export async function getChart(asset: Asset, days = 90): Promise<Candle[]> {
 }
 
 export async function getNewsFor(assets: Asset[]): Promise<NewsItem[]> {
-  const equities = assets.filter((a) => !isCrypto(a)).slice(0, 12);
+  // Todas las acciones que sigues, no solo las primeras: con 6 llamadas por
+  // tanda y 1,1 s entre tandas, 40 simbolos caben de sobra en el limite de
+  // Finnhub (60/min) y el cron corre solo dos veces al dia.
+  const equities = assets.filter((a) => !isCrypto(a)).slice(0, 40);
   const seen = new Set<string>();
   const out: NewsItem[] = [];
 
@@ -199,5 +202,7 @@ export async function getNewsFor(assets: Asset[]): Promise<NewsItem[]> {
     out.push(n);
   }
 
-  return out.sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 60);
+  // Tope generoso: lo que no se procese hoy queda en cola (selectPendingNews
+  // prioriza lo mas reciente) y el presupuesto diario de IA sigue mandando.
+  return out.sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 150);
 }

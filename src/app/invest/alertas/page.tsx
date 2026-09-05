@@ -206,7 +206,7 @@ export default function AlertasPage() {
       ) : list.length === 0 ? (
         <EmptyState title={`Nada que merezca una alerta en ${period.label.toLowerCase()}`}>
           {filter === "signals"
-            ? "No hay eventos P1-P3 con fecha en este periodo. Cambia el periodo arriba, o lanza el motor: corre solo cada 4 horas sobre las noticias de tus activos."
+            ? "No hay eventos P1-P3 con fecha en este periodo. Cambia el periodo arriba, o lanza el motor: corre dos veces al dia (antes de la apertura y tras el cierre) sobre las noticias de tus activos."
             : "No hay eventos con fecha en este periodo. Cambia el periodo arriba o dale a Analizar ahora."}
         </EmptyState>
       ) : (

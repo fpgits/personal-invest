@@ -8,6 +8,7 @@ import { NEWS_SYSTEM } from "./ai/prompts";
 import { GROUP_CLASSES, type GroupKey } from "./period-metrics";
 import { listAssets } from "./assets";
 import { finnhub, getNewsFor } from "./market";
+import { googleNewsFor } from "./market/google-news";
 import type { NewsItem } from "./market/types";
 import { getSetting, setSetting } from "./settings";
 import { id } from "./utils";
@@ -19,7 +20,7 @@ export const NEWS_LAST_ERROR_KEY = "news_last_error";
  * intentar como mucho una vez al dia y solo mientras es reciente: el motor
  * de eventos descarta lo de mas de 14 dias, asi que resumir algo de hace
  * dos semanas es tirar el dinero. Antes se reenviaban TODAS las fallidas
- * en cada pasada (cada 4 h), con dos modelos cada vez.
+ * en cada pasada (dos al dia), con dos modelos cada vez.
  */
 export const NEWS_RETRY = {
   /** Espera minima entre intentos de una misma noticia. */
@@ -85,6 +86,17 @@ export async function ingestNews(): Promise<number> {
   if (assets.length === 0) return 0;
 
   const items: NewsItem[] = await getNewsFor(assets);
+
+  // Segundo agregador (Google News RSS): lo que Finnhub no trae de las
+  // empresas chicas. Mejor esfuerzo; sin clave.
+  {
+    const seen = new Set(items.map((n) => n.url));
+    for (const n of await googleNewsFor(assets).catch(() => [])) {
+      if (seen.has(n.url)) continue;
+      seen.add(n.url);
+      items.push(n);
+    }
+  }
 
   // Cripto: la categoria general de Finnhub, etiquetada por nombre/simbolo.
   // Lo que no menciona ninguna de tus monedas no entra.

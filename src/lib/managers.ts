@@ -710,14 +710,14 @@ async function createEvents(
   return created;
 }
 
-type TrackedContext = {
+export type TrackedContext = {
   assetIdBySymbol: Map<string, string>;
   relevance: Parameters<typeof portfolioRelevance>[1];
   positions: Set<string>;
   watch: Set<string>;
 };
 
-async function trackedContext(): Promise<TrackedContext> {
+export async function trackedContext(): Promise<TrackedContext> {
   const [all, portfolio, watchRows] = await Promise.all([
     db.select().from(assets),
     computePortfolio({ cacheOnly: true }).catch(() => null),
