@@ -2,10 +2,11 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Bot, FileText, Send, ShieldAlert, User } from "lucide-react";
+import { Bot, FileText, Gauge, Send, ShieldAlert, User } from "lucide-react";
 import { Card, PageTitle } from "@/components/ui";
 import { api } from "@/lib/utils";
 import { ThesisPanel } from "./thesis-panel";
+import { VeredictoPanel } from "./veredicto-panel";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -16,7 +17,7 @@ const SUGGESTIONS = [
   "Que noticias recientes afectan a lo que tengo?",
 ];
 
-type Tab = "chat" | "riesgo" | "tesis";
+type Tab = "veredicto" | "chat" | "riesgo" | "tesis";
 
 export default function AnalisisPage() {
   return (
@@ -28,8 +29,10 @@ export default function AnalisisPage() {
 
 function AnalisisInner() {
   // ?tab=tesis&pending=1 abre la pestana de tesis (enlace desde Alertas).
+  // Por defecto abre el Veredicto: es el nucleo (que comprar / que vender).
   const params = useSearchParams();
-  const fromQuery: Tab = params.get("tab") === "tesis" ? "tesis" : "chat";
+  const q = params.get("tab");
+  const fromQuery: Tab = q === "chat" || q === "riesgo" || q === "tesis" ? q : "veredicto";
   const focusPending = params.get("pending") === "1";
   const [override, setTab] = useState<Tab | null>(null);
   const tab = override ?? fromQuery;
@@ -43,6 +46,7 @@ function AnalisisInner() {
       <div className="mb-4 flex gap-1 rounded-lg border border-border bg-surface p-1">
         {(
           [
+            ["veredicto", "Veredicto", Gauge],
             ["chat", "Chat", Bot],
             ["riesgo", "Riesgo", ShieldAlert],
             ["tesis", "Tesis", FileText],
@@ -63,6 +67,7 @@ function AnalisisInner() {
         ))}
       </div>
 
+      {tab === "veredicto" && <VeredictoPanel />}
       {tab === "chat" && <Chat />}
       {tab === "riesgo" && <RiskPanel />}
       {tab === "tesis" && <ThesisPanel focusPending={focusPending} />}

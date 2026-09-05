@@ -8,6 +8,7 @@ import type { AiUsageResponse, UsageBucket } from "@/lib/ai/policy";
 import type { HistorySummary, RebuildReport } from "@/lib/history";
 import { fmtDay } from "@/lib/period";
 import { api, fmtDateTime } from "@/lib/utils";
+import { OracleCard } from "./oracle-card";
 
 type ModelInfo = {
   id: string;
@@ -181,6 +182,8 @@ export default function AjustesPage() {
           </div>
         </div>
       </Card>
+
+      <OracleCard stored={settingsData?.settings} onSaved={() => mutate()} />
 
       <UsageCard
         budgetEdit={budgetEdit}

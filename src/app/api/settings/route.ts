@@ -17,6 +17,15 @@ const schema = z.object({
     .trim()
     .regex(/^\d{1,5}(\.\d{1,2})?$/, "Presupuesto no valido")
     .optional(),
+  // Oraculo (se guardan como texto; se validan al leer con valores por defecto).
+  [SETTING_KEYS.oracleMonthlyEquity]: z.string().trim().regex(/^\d{1,8}(\.\d{1,2})?$/, "Importe no valido").optional(),
+  [SETTING_KEYS.oracleMonthlyCrypto]: z.string().trim().regex(/^\d{1,8}(\.\d{1,2})?$/, "Importe no valido").optional(),
+  [SETTING_KEYS.oracleMaxWeightPct]: z.string().trim().regex(/^\d{1,3}(\.\d{1,2})?$/, "Peso no valido").optional(),
+  [SETTING_KEYS.oracleMinTicket]: z.string().trim().regex(/^\d{1,7}(\.\d{1,2})?$/, "Ticket no valido").optional(),
+  [SETTING_KEYS.oracleBuyThreshold]: z.string().trim().regex(/^\d{1,3}(\.\d{1,2})?$/, "Umbral no valido").optional(),
+  [SETTING_KEYS.oracleReserveSymbol]: z.string().trim().max(12).optional(),
+  [SETTING_KEYS.oracleCryptoCore]: z.string().trim().max(200).optional(),
+  [SETTING_KEYS.oracleContributionDay]: z.string().trim().regex(/^([1-9]|1\d|2[0-8])$/, "Dia no valido (1-28)").optional(),
 });
 
 export const GET = protectedRoute(async () => {

@@ -14,7 +14,64 @@ export const SETTING_KEYS = {
   costMethod: "cost_method", // average | fifo
   /** USD al dia para las llamadas de fondo (crons). 0 = sin limite. */
   aiDailyBudget: "ai_daily_budget_usd",
+  // Oraculo: parametros del plan mensual. Se editan en Ajustes.
+  oracleMonthlyEquity: "oracle_monthly_equity",
+  oracleMonthlyCrypto: "oracle_monthly_crypto",
+  oracleMaxWeightPct: "oracle_max_weight_pct",
+  oracleMinTicket: "oracle_min_ticket",
+  oracleBuyThreshold: "oracle_buy_threshold",
+  oracleReserveSymbol: "oracle_reserve_symbol",
+  oracleCryptoCore: "oracle_crypto_core",
+  oracleContributionDay: "oracle_contribution_day",
 } as const;
+
+export type OracleSettings = {
+  monthlyEquity: number;
+  monthlyCrypto: number;
+  maxWeightPct: number;
+  minTicket: number;
+  buyThreshold: number;
+  reserveSymbol: string | null;
+  /** "BTC:60,ETH:40" */
+  cryptoCore: string;
+  contributionDay: number;
+};
+
+export const ORACLE_DEFAULTS: OracleSettings = {
+  monthlyEquity: 4000,
+  monthlyCrypto: 2500,
+  maxWeightPct: 15,
+  minTicket: 500,
+  buyThreshold: 64,
+  reserveSymbol: "SGOV",
+  cryptoCore: "BTC:60,ETH:40",
+  contributionDay: 1,
+};
+
+/** Parametros del oraculo con valores por defecto sensatos. Puro sobre el mapa de ajustes. */
+export function oracleFromSettings(all: Record<string, string>): OracleSettings {
+  const num = (key: string, fallback: number, min: number, max: number) => {
+    const v = Number(all[key]);
+    return all[key] !== undefined && Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+  };
+  const rawReserve = all[SETTING_KEYS.oracleReserveSymbol];
+  const reserve = (rawReserve === undefined ? ORACLE_DEFAULTS.reserveSymbol ?? "" : rawReserve).trim().toUpperCase();
+  return {
+    monthlyEquity: num(SETTING_KEYS.oracleMonthlyEquity, ORACLE_DEFAULTS.monthlyEquity, 0, 10_000_000),
+    monthlyCrypto: num(SETTING_KEYS.oracleMonthlyCrypto, ORACLE_DEFAULTS.monthlyCrypto, 0, 10_000_000),
+    maxWeightPct: num(SETTING_KEYS.oracleMaxWeightPct, ORACLE_DEFAULTS.maxWeightPct, 1, 100),
+    minTicket: num(SETTING_KEYS.oracleMinTicket, ORACLE_DEFAULTS.minTicket, 0, 1_000_000),
+    buyThreshold: num(SETTING_KEYS.oracleBuyThreshold, ORACLE_DEFAULTS.buyThreshold, 0, 100),
+    reserveSymbol: reserve === "" || reserve === "NONE" ? null : reserve,
+    cryptoCore: (all[SETTING_KEYS.oracleCryptoCore] ?? "").trim() || ORACLE_DEFAULTS.cryptoCore,
+    contributionDay: num(SETTING_KEYS.oracleContributionDay, ORACLE_DEFAULTS.contributionDay, 1, 28),
+  };
+}
+
+export async function resolveOracleSettings(): Promise<OracleSettings> {
+  const all = await getAllSettings().catch(() => ({}) as Record<string, string>);
+  return oracleFromSettings(all);
+}
 
 export async function getSetting(key: string): Promise<string | null> {
   const row = await db

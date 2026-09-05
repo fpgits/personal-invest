@@ -126,5 +126,37 @@ console.log("\n# financialsToText");
   eq(financialsToText(buildFinancials({ revenue: [], netIncome: [], eps: [], equity: [] }, 1)), "", "sin datos → vacio");
 }
 
+console.log("\n# FCF, deuda neta y acciones");
+{
+  const view = buildFinancials(
+    {
+      revenue: [{ fy: 2025, end: "x", val: 100e9 }],
+      netIncome: [{ fy: 2025, end: "x", val: 20e9 }],
+      eps: [],
+      equity: [],
+      ocf: [{ fy: 2025, end: "x", val: 30e9 }],
+      // Capex llega como pago (positivo) en XBRL; da igual el signo.
+      capex: [{ fy: 2025, end: "x", val: 8e9 }],
+      debt: [{ fy: 2025, end: "x", val: 10e9 }],
+      cash: [{ fy: 2025, end: "x", val: 25e9 }],
+      shares: [{ fy: 2025, end: "x", val: 5e9 }],
+    },
+    1,
+  );
+  const y = view.years[0];
+  eq(y.fcf, 22e9, "FCF = OCF - capex");
+  eq(y.fcfMargin, 22, "margen FCF en %");
+  eq(y.netDebt, -15e9, "caja neta (deuda - caja negativa)");
+  eq(y.shares, 5e9, "acciones diluidas del ejercicio");
+  truthy(financialsToText(view).includes("FCF 22B") && financialsToText(view).includes("caja neta 15B"), "el texto incluye FCF y caja neta");
+
+  // Sin capex no se inventa FCF.
+  const noCapex = buildFinancials(
+    { revenue: [{ fy: 2025, end: "x", val: 1e9 }], netIncome: [], eps: [], equity: [], ocf: [{ fy: 2025, end: "x", val: 3e8 }] },
+    1,
+  );
+  eq(noCapex.years[0].fcf, null, "sin capex, FCF null (no se asume capex cero)");
+}
+
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);
 process.exit(failures > 0 ? 1 : 0);

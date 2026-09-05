@@ -375,6 +375,47 @@ export const cashFlows = sqliteTable(
   ],
 );
 
+/**
+ * Registro de llamadas del oraculo: cada veredicto y cada linea del plan
+ * mensual, con el precio del momento. Un job nocturno rellena el retorno a
+ * 30/90/180/365 dias para medir si el motor acierta. Sin esto, el motor es
+ * una opinion; con esto, una probabilidad ganada.
+ */
+export const convictionCalls = sqliteTable(
+  "conviction_calls",
+  {
+    id: text("id").primaryKey(),
+    /** Agrupa las llamadas de una misma corrida (veredicto o plan). */
+    batchId: text("batch_id").notNull(),
+    /** verdict | plan | benchmark */
+    kind: text("kind").notNull(),
+    assetId: text("asset_id"),
+    symbol: text("symbol").notNull(),
+    assetClass: text("asset_class").notNull(),
+    posture: text("posture").notNull(),
+    score: real("score").notNull(),
+    confidence: real("confidence").notNull(),
+    price: real("price"),
+    fairValue: real("fair_value"),
+    upsidePct: real("upside_pct"),
+    marginOfSafetyPct: real("margin_of_safety_pct"),
+    /** Dolares asignados en el plan (solo kind = plan). */
+    planAmount: real("plan_amount"),
+    rationale: text("rationale"),
+    calledAt: integer("called_at").notNull(),
+    ret30: real("ret_30"),
+    ret90: real("ret_90"),
+    ret180: real("ret_180"),
+    ret365: real("ret_365"),
+    markedAt: integer("marked_at"),
+  },
+  (t) => [
+    index("conviction_calls_symbol_idx").on(t.symbol),
+    index("conviction_calls_called_idx").on(t.calledAt),
+    index("conviction_calls_batch_idx").on(t.batchId),
+  ],
+);
+
 /** CUSIP → ticker (OpenFIGI), cacheado para no repetir consultas. */
 export const cusipMap = sqliteTable("cusip_map", {
   cusip: text("cusip").primaryKey(),
@@ -578,3 +619,4 @@ export type ManagerFiling = typeof managerFilings.$inferSelect;
 export type ManagerHolding = typeof managerHoldings.$inferSelect;
 export type AiCall = typeof aiCalls.$inferSelect;
 export type CashFlow = typeof cashFlows.$inferSelect;
+export type ConvictionCall = typeof convictionCalls.$inferSelect;

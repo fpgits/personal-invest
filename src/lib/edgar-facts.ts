@@ -93,6 +93,22 @@ export type FinancialYear = {
   equity: number | null;
   /** crecimiento de ingresos frente al ano anterior, en %. */
   revenueGrowth: number | null;
+  /** Caja generada por las operaciones. */
+  ocf: number | null;
+  /** Inversion en inmovilizado (capex), en positivo. */
+  capex: number | null;
+  /** Flujo de caja libre = OCF - capex: el "beneficio del dueno". */
+  fcf: number | null;
+  /** FCF / ingresos, en %. */
+  fcfMargin: number | null;
+  /** Deuda a largo plazo. */
+  debt: number | null;
+  /** Caja y equivalentes. */
+  cash: number | null;
+  /** Deuda menos caja; negativo = caja neta. */
+  netDebt: number | null;
+  /** Acciones diluidas medias del ejercicio (para ver recompras/dilucion). */
+  shares: number | null;
 };
 
 export type FinancialsView = {
@@ -109,6 +125,20 @@ export const REVENUE_TAGS = [
   "SalesRevenueNet",
   "RevenueFromContractWithCustomerIncludingAssessedTax",
 ];
+export const OCF_TAGS = [
+  "NetCashProvidedByUsedInOperatingActivities",
+  "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+];
+export const CAPEX_TAGS = [
+  "PaymentsToAcquirePropertyPlantAndEquipment",
+  "PaymentsToAcquireProductiveAssets",
+];
+export const DEBT_TAGS = ["LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"];
+export const CASH_TAGS = [
+  "CashAndCashEquivalentsAtCarryingValue",
+  "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+];
+export const SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding"];
 
 /** Combina las series de conceptos en una tabla por ano. Puro y testeable. */
 export function buildFinancials(
@@ -118,17 +148,27 @@ export function buildFinancials(
     eps: ConceptPoint[];
     equity: ConceptPoint[];
     sharesOut?: number | null;
+    ocf?: ConceptPoint[];
+    capex?: ConceptPoint[];
+    debt?: ConceptPoint[];
+    cash?: ConceptPoint[];
+    shares?: ConceptPoint[];
   },
   now: number,
   maxYears = 8,
 ): FinancialsView {
-  const map = (pts: ConceptPoint[]) => new Map(pts.map((p) => [p.fy, p.val]));
+  const map = (pts: ConceptPoint[] | undefined) => new Map((pts ?? []).map((p) => [p.fy, p.val]));
   const rev = map(input.revenue);
   const ni = map(input.netIncome);
   const eps = map(input.eps);
   const eq = map(input.equity);
+  const ocf = map(input.ocf);
+  const capex = map(input.capex);
+  const debt = map(input.debt);
+  const cash = map(input.cash);
+  const shares = map(input.shares);
 
-  const fys = [...new Set([...rev.keys(), ...ni.keys(), ...eps.keys(), ...eq.keys()])].sort(
+  const fys = [...new Set([...rev.keys(), ...ni.keys(), ...eps.keys(), ...eq.keys(), ...ocf.keys()])].sort(
     (a, b) => a - b,
   );
 
@@ -136,6 +176,13 @@ export function buildFinancials(
     const revenue = rev.get(fy) ?? null;
     const netIncome = ni.get(fy) ?? null;
     const prevRev = rev.get(fy - 1) ?? null;
+    const o = ocf.get(fy) ?? null;
+    const c = capex.get(fy) ?? null;
+    // Sin dato de capex pero con OCF, el FCF queda sin calcular: no se
+    // inventa un capex cero (sobreestimaria el FCF de una industria pesada).
+    const fcf = o !== null && c !== null ? o - Math.abs(c) : null;
+    const d = debt.get(fy) ?? null;
+    const k = cash.get(fy) ?? null;
     return {
       fy,
       revenue,
@@ -147,6 +194,14 @@ export function buildFinancials(
         revenue !== null && prevRev !== null && prevRev !== 0
           ? round(((revenue - prevRev) / Math.abs(prevRev)) * 100, 1)
           : null,
+      ocf: o,
+      capex: c !== null ? Math.abs(c) : null,
+      fcf,
+      fcfMargin: fcf !== null && revenue && revenue !== 0 ? round((fcf / revenue) * 100, 1) : null,
+      debt: d,
+      cash: k,
+      netDebt: d !== null && k !== null ? d - k : d !== null ? d : null,
+      shares: shares.get(fy) ?? null,
     };
   });
 
@@ -187,6 +242,8 @@ export function financialsToText(view: FinancialsView): string {
     if (y.netIncome !== null) parts.push(`beneficio ${money(y.netIncome)}`);
     if (y.netMargin !== null) parts.push(`margen ${y.netMargin}%`);
     if (y.eps !== null) parts.push(`BPA ${y.eps}`);
+    if (y.fcf !== null) parts.push(`FCF ${money(y.fcf)}`);
+    if (y.netDebt !== null) parts.push(y.netDebt <= 0 ? `caja neta ${money(-y.netDebt)}` : `deuda neta ${money(y.netDebt)}`);
     if (parts.length > 0) lines.push(`FY${y.fy}: ${parts.join(", ")}`);
   }
   return lines.join("\n");
@@ -203,6 +260,8 @@ export async function companyFinancials(cik: string, now = Date.now()): Promise<
   const hit = memo.get(cik10);
   if (hit && now - hit.at < TTL_MS) return hit.value;
 
+  // Dos tandas de cinco: la SEC admite ~10 peticiones/seg y el motor evalua
+  // varias empresas a la vez.
   const [revenue, netIncome, eps, equity, shares] = await Promise.all([
     annualFirst(cik10, "us-gaap", REVENUE_TAGS),
     annual(cik10, "us-gaap", "NetIncomeLoss"),
@@ -210,9 +269,27 @@ export async function companyFinancials(cik: string, now = Date.now()): Promise<
     annual(cik10, "us-gaap", "StockholdersEquity"),
     annualFirst(cik10, "dei", ["EntityCommonStockSharesOutstanding"]),
   ]);
+  const [ocf, capex, debt, cash, dilutedShares] = await Promise.all([
+    annualFirst(cik10, "us-gaap", OCF_TAGS),
+    annualFirst(cik10, "us-gaap", CAPEX_TAGS),
+    annualFirst(cik10, "us-gaap", DEBT_TAGS),
+    annualFirst(cik10, "us-gaap", CASH_TAGS),
+    annualFirst(cik10, "us-gaap", SHARES_TAGS),
+  ]);
 
   const view = buildFinancials(
-    { revenue, netIncome, eps, equity, sharesOut: shares.at(-1)?.val ?? null },
+    {
+      revenue,
+      netIncome,
+      eps,
+      equity,
+      sharesOut: shares.at(-1)?.val ?? null,
+      ocf,
+      capex,
+      debt,
+      cash,
+      shares: dilutedShares,
+    },
     now,
   );
   memo.set(cik10, { at: now, value: view });

@@ -1,6 +1,7 @@
 import { errorResponse } from "@/lib/api";
 import { listAssets } from "@/lib/assets";
 import { isCronAuthorized } from "@/lib/auth";
+import { markForwardReturns } from "@/lib/conviction-calls";
 import { refreshQuotes } from "@/lib/market";
 import { takeSnapshot } from "@/lib/snapshot";
 
@@ -25,7 +26,10 @@ export async function GET(req: Request) {
       await refreshQuotes(await listAssets()).catch(() => undefined);
       result = await takeSnapshot();
       if (result.stored) {
+        // Con precios frescos, medir las llamadas del oraculo que vencen hoy.
+        const marked = await markForwardReturns().catch(() => 0);
         return Response.json({
+          oracleCallsMarked: marked,
           date: result.snapshot.date,
           totalValue: result.snapshot.totalValue,
           unrealizedPnl: result.snapshot.unrealizedPnl,
