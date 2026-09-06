@@ -8,6 +8,7 @@ import {
   Bot,
   Briefcase,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   Menu,
   Newspaper,
@@ -21,6 +22,7 @@ import { api, cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/invest", label: "Resumen", icon: LayoutDashboard },
+  { href: "/invest/brief", label: "Que hacer", icon: ListChecks },
   { href: "/invest/cartera", label: "Cartera", icon: Briefcase },
   { href: "/invest/watchlist", label: "Watchlist", icon: Star },
   { href: "/invest/alertas", label: "Alertas", icon: Bell },

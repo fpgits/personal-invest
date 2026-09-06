@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { RefreshCw } from "lucide-react";
+import { BriefCard } from "@/components/brief-card";
 import { SetupNotice } from "@/components/setup-notice";
 import { Badge, EmptyState, PageTitle } from "@/components/ui";
 import { GroupPicker } from "@/components/group-picker";
@@ -89,6 +90,8 @@ export default async function DashboardPage() {
       >
         Resumen
       </PageTitle>
+
+      <BriefCard compact />
 
       {macro && <MacroStrip macro={macro} />}
 
