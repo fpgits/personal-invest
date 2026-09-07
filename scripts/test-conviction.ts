@@ -295,6 +295,69 @@ console.log("\n# pico de ciclo: margen actual muy por encima de su historia -> a
   const calm = evaluate({ ...base, fundamentals: { ...base.fundamentals!, netMargin: 9 } });
   truthy(!peakCycle({ ...base, fundamentals: { ...base.fundamentals!, netMargin: 9 } }).flagged, "sin pico con margen normal");
   truthy(r.factors.find((f) => f.key === "valuation")!.score! < calm.factors.find((f) => f.key === "valuation")!.score!, "valoracion recortada en pico");
+  truthy(pk.severity > 0.5, `severidad alta con margen 35% sobre mediana 8.3% (${pk.severity})`);
+  truthy(!r.caveats.some((c) => c.includes("escenario bajista")), "ya no dice que el DCF va al caso bajista");
+}
+
+console.log("\n# margen que mejora ano tras ano NO es pico: es cambio estructural");
+{
+  // El caso real que rompia el modelo: Amazon con AWS y publicidad, Netflix
+  // tras subir precios. Sube seis anos seguidos, con un bache por medio.
+  const structural: ConvictionInput = {
+    symbol: "GROW", assetClass: "equity", price: 100, riskFreeRate: 4.0,
+    fundamentals: { ...EMPTY_METRICS, pe: 21, netMargin: 17.4, grossMargin: 48, roe: 25, revenueGrowthYoy: 16 },
+    financials: financials([
+      { fy: 2019, revenue: 100, netIncome: 4.1, netMargin: 4.1 },
+      { fy: 2020, revenue: 120, netIncome: 6.6, netMargin: 5.5 },
+      { fy: 2021, revenue: 145, netIncome: 10.3, netMargin: 7.1 },
+      { fy: 2022, revenue: 160, netIncome: -0.8, netMargin: -0.5 },
+      { fy: 2023, revenue: 180, netIncome: 9.5, netMargin: 5.3 },
+      { fy: 2024, revenue: 210, netIncome: 19.5, netMargin: 9.3 },
+    ]),
+  };
+  const pk = peakCycle(structural);
+  truthy(pk.streak === 3, `detecta 3 anos seguidos de mejora (${pk.streak})`);
+  truthy(!pk.flagged, `no lo marca como pico pese a estar ${Math.round(pk.current! / pk.median!)}x sobre la mediana`);
+  truthy(pk.severity === 0, `y por tanto no penaliza nada (${pk.severity})`);
+  const r = evaluate(structural);
+  truthy(
+    r.caveats.some((c) => c.includes("cambio estructural")),
+    "pero lo dice en voz alta, por si el margen revierte",
+  );
+
+  // Un diente de sierra de verdad (memoria, semis) SIGUE marcandose.
+  const cyclical: ConvictionInput = {
+    ...structural,
+    symbol: "SAW",
+    fundamentals: { ...structural.fundamentals!, netMargin: 40 },
+    financials: financials([
+      { fy: 2020, revenue: 100, netIncome: 10, netMargin: 10 },
+      { fy: 2021, revenue: 130, netIncome: 58, netMargin: 45 },
+      { fy: 2022, revenue: 110, netIncome: 9, netMargin: 8 },
+      { fy: 2023, revenue: 120, netIncome: 14, netMargin: 12 },
+      { fy: 2024, revenue: 150, netIncome: 60, netMargin: 40 },
+    ]),
+  };
+  const saw = peakCycle(cyclical);
+  truthy(saw.flagged, `el diente de sierra sigue marcandose (racha ${saw.streak}a)`);
+  truthy(saw.severity === 1, `y con severidad maxima (${saw.severity})`);
+}
+
+console.log("\n# la severidad es gradual, no un interruptor");
+{
+  const mk = (margin: number, hist: number[]): ConvictionInput => ({
+    symbol: "SEV", assetClass: "equity", price: 100, riskFreeRate: 4.0,
+    fundamentals: { ...EMPTY_METRICS, pe: 15, netMargin: margin, grossMargin: 60, roe: 20, revenueGrowthYoy: 12 },
+    financials: financials(hist.map((m, i) => ({ fy: 2020 + i, revenue: 100, netIncome: m, netMargin: m }))),
+  });
+  // Diente de sierra en todos los casos; solo cambia cuanto sobresale el actual.
+  const saw = [10, 30, 9, 12];
+  const leve = peakCycle(mk(22, saw));
+  const medio = peakCycle(mk(28, saw));
+  const fuerte = peakCycle(mk(40, saw));
+  truthy(leve.severity < medio.severity && medio.severity < fuerte.severity, `severidad creciente: ${leve.severity} < ${medio.severity} < ${fuerte.severity}`);
+  truthy(fuerte.severity === 1, `topa en 1 (${fuerte.severity})`);
+  truthy(leve.severity > 0 && leve.severity < 1, `un pico leve no recibe el castigo entero (${leve.severity})`);
 }
 
 console.log("\n# beneficio que no se convierte en caja -> aviso");

@@ -231,18 +231,70 @@ export function fcfPerShare(view: FinancialsView | null): number | null {
 }
 
 /**
+ * Anos consecutivos, contando hacia atras desde el actual, en que el margen
+ * mejoro. `current` suele ser el mismo dato que el ultimo ejercicio (viene de
+ * los fundamentales TTM), asi que solo se anade si de verdad es otro punto.
+ */
+export function risingStreak(margins: number[], current: number): number {
+  const last = margins.length > 0 ? margins[margins.length - 1] : null;
+  const series = last !== null && Math.abs(last - current) < 0.05 ? [...margins] : [...margins, current];
+  let streak = 0;
+  for (let i = series.length - 1; i > 0; i--) {
+    if (series[i] > series[i - 1]) streak++;
+    else break;
+  }
+  return streak;
+}
+
+/** Mejora sostenida a partir de la cual se considera cambio estructural, no pico. */
+export const STRUCTURAL_STREAK = 3;
+/** Multiplo de la mediana a partir del cual empieza a haber sospecha de pico. */
+export const PEAK_TRIGGER = 1.5;
+/** Multiplo al que la sospecha es total (severidad 1). */
+export const PEAK_FULL = 3;
+
+export type PeakCycle = {
+  flagged: boolean;
+  /** 0..1. Gradual: un margen 1,6x la mediana no es lo mismo que uno 3x. */
+  severity: number;
+  current: number | null;
+  median: number | null;
+  /** Anos seguidos mejorando. >= STRUCTURAL_STREAK se lee como cambio de negocio. */
+  streak: number;
+};
+
+/**
  * Senal de pico de ciclo: el margen actual muy por encima de su mediana
  * historica. Un PER bajo sobre beneficios de pico es la trampa de valor
  * clasica (memoria, semiconductores, materias primas). Necesita 4+ anos.
+ *
+ * Dos correcciones sobre la version ingenua, ambas por el mismo motivo: un
+ * margen alto no significa pico, significa margen alto.
+ *
+ *  1. DIAGNOSTICO. Si el margen lleva STRUCTURAL_STREAK anos seguidos
+ *     mejorando, no es un ciclo: es que el negocio cambio (AWS y publicidad
+ *     en Amazon, subida de precios y fin de las cuentas compartidas en
+ *     Netflix). Un pico ciclico sube y baja; una mejora estructural sube. Sin
+ *     esto el modelo castiga a una empresa por haber sido peor antes.
+ *  2. SEVERIDAD. Antes era un interruptor: o nada, o el castigo entero. Ahora
+ *     es un gradiente entre PEAK_TRIGGER y PEAK_FULL veces la mediana.
  */
-export function peakCycle(input: ConvictionInput): { flagged: boolean; current: number | null; median: number | null } {
+export function peakCycle(input: ConvictionInput): PeakCycle {
   const margins = (input.financials?.years ?? []).map((y) => y.netMargin).filter(isFin);
-  if (margins.length < 4) return { flagged: false, current: null, median: null };
+  if (margins.length < 4) return { flagged: false, severity: 0, current: null, median: null, streak: 0 };
   const current = input.fundamentals?.netMargin ?? margins[margins.length - 1];
   const sorted = [...margins].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
-  const flagged = median > 0 && current > median * 1.5 && current - median > 8;
-  return { flagged, current: round(current), median: round(median) };
+  const streak = risingStreak(margins, current);
+
+  const suspicious = median > 0 && current > median * PEAK_TRIGGER && current - median > 8;
+  const structural = streak >= STRUCTURAL_STREAK;
+  const flagged = suspicious && !structural;
+  const ratio = median > 0 ? current / median : 1;
+  const severity = flagged
+    ? Math.max(0, Math.min(1, (ratio - PEAK_TRIGGER) / (PEAK_FULL - PEAK_TRIGGER)))
+    : 0;
+  return { flagged, severity: round(severity, 2), current: round(current), median: round(median), streak };
 }
 
 /** Conversion a caja del ultimo ejercicio: OCF / beneficio neto (1 = todo el beneficio es caja). */
@@ -347,10 +399,11 @@ function scoreValuation(input: ConvictionInput): Factor {
   }
 
   let score = weightedAvg(parts);
-  // Multiplos baratos sobre beneficios de pico enganan: recorte.
+  // Multiplos baratos sobre beneficios de pico enganan: recorte proporcional
+  // a lo marcado que este el pico (hasta un 20%), no un salto seco.
   const peak = peakCycle(input);
   if (score !== null && peak.flagged) {
-    score = score * 0.8;
+    score = score * (1 - 0.2 * peak.severity);
     bits.push(`posible pico de ciclo (margen ${peak.current}% vs mediana ${peak.median}%)`);
   }
   return {
@@ -589,7 +642,12 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
   const price = input.price;
   if (!isFin(price) || price <= 0) return NO_FAIR;
   const growth = growthEstimate(input) ?? 0;
-  const peak = peakCycle(input).flagged;
+  // El pico de ciclo se descuenta en UNA sola pata, no en las dos. Va en el
+  // PER porque se apoya en el beneficio TTM, que es justo lo que esta inflado
+  // en un pico. El DCF ya se corrige solo: proyecta el crecimiento decayendo
+  // hacia el 3% durante diez anos, asi que forzarlo ademas al caso bajista era
+  // cobrar dos veces por el mismo argumento.
+  const peakSeverity = peakCycle(input).severity;
 
   // Pata 1: DCF sobre FCF.
   let dcfValue: number | null = null;
@@ -601,7 +659,7 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
     discountPct = discountRate(input.riskFreeRate, input.fundamentals?.beta ?? null);
     range = dcfRange({ fcfPerShare: fps, growthPct: growth, discountPct });
     if (range) {
-      dcfValue = peak ? range.bear : range.base;
+      dcfValue = range.base;
       impliedGrowthPct = reverseDcf(price, { fcfPerShare: fps, discountPct });
     }
   }
@@ -616,11 +674,11 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
     if (isFin(epsTtm) && epsTtm > 0) {
       const required = (isFin(input.riskFreeRate) ? input.riskFreeRate : 4.0) + EQUITY_RISK_PREMIUM;
       const noGrowthPe = 100 / required;
-      // En pico de ciclo el BPA tambien esta inflado: multiplo sin prima de crecimiento.
-      justifiedPe = Math.max(
-        PE_FLOOR,
-        Math.min(PE_CEIL, noGrowthPe + (peak ? 0 : Math.max(0, growth) * PEG_PREMIUM_K)),
-      );
+      // En pico de ciclo el BPA esta inflado, asi que la prima de crecimiento
+      // se recorta EN PROPORCION a lo marcado que este el pico: severidad 0
+      // deja la prima entera, severidad 1 la quita del todo.
+      const premium = Math.max(0, growth) * PEG_PREMIUM_K * (1 - peakSeverity);
+      justifiedPe = Math.max(PE_FLOOR, Math.min(PE_CEIL, noGrowthPe + premium));
       peValue = round(epsTtm * justifiedPe, 2);
       justifiedPe = round(justifiedPe, 1);
     }
@@ -813,7 +871,11 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
   const peak = peakCycle(input);
   if (peak.flagged) {
     caveats.push(
-      `Posible pico de ciclo: margen ${peak.current}% frente a una mediana historica de ${peak.median}%; valoracion recortada y valor razonable en escenario bajista.`,
+      `Posible pico de ciclo: margen ${peak.current}% frente a una mediana historica de ${peak.median}%. El valor razonable asume que ese margen no se sostiene, y recorta la prima de crecimiento un ${Math.round(peak.severity * 100)}%.`,
+    );
+  } else if (peak.streak >= STRUCTURAL_STREAK && peak.current !== null && peak.median !== null && peak.current > peak.median) {
+    caveats.push(
+      `El margen lleva ${peak.streak} anos seguidos mejorando (${peak.current}% frente a una mediana historica de ${peak.median}%): se trata como cambio estructural, no como pico de ciclo. Si crees que revierte, el valor razonable es optimista.`,
     );
   }
   const conv = cashConversion(input.financials);
