@@ -1,3 +1,6 @@
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { assets, watchlist } from "@/db/schema";
 import { allocate, type Plan } from "./allocation";
 import { companyFinancials } from "./edgar-facts";
 import { getFundamentalsMap } from "./fundamentals";
@@ -5,15 +8,19 @@ import { evaluate, rankResults, type ConvictionResult } from "./conviction";
 import { recordBatch } from "./conviction-calls";
 import { cryptoPlan, cycleStatsFor, parseCore, type CryptoPlan } from "./crypto-cycle";
 import { getMacro, riskFreeRate } from "./macro";
+import { getCachedQuotes } from "./market";
 import { computePortfolio } from "./portfolio";
 import { resolveOracleSettings, type OracleSettings } from "./settings";
 import { batched } from "./utils";
 
 /**
- * Corre el motor de conviccion sobre la cartera real: junta posiciones, precios,
- * fundamentales de Finnhub, historico de EDGAR y el tipo libre de riesgo de FRED
- * y devuelve el veredicto ordenado por accionabilidad. Todo mejor esfuerzo: si
- * una fuente falla para un activo, se evalua con lo que haya y baja la confianza.
+ * Corre el motor de conviccion sobre la cartera real Y la watchlist: junta
+ * posiciones, precios, fundamentales de Finnhub, historico de EDGAR y el tipo
+ * libre de riesgo de FRED y devuelve el veredicto ordenado por accionabilidad.
+ * Los de la watchlist entran como candidatos (sin posicion): asi "que comprar"
+ * puede traer nombres nuevos y el plan del mes puede asignarles dinero. Todo
+ * mejor esfuerzo: si una fuente falla para un activo, se evalua con lo que
+ * haya y baja la confianza.
  */
 export type RunHolding = {
   symbol: string;
@@ -27,6 +34,8 @@ export type RunHolding = {
 export type ConvictionRun = {
   results: ConvictionResult[];
   holdings: RunHolding[];
+  /** Candidatos de la watchlist evaluados (sin posicion). */
+  candidates: RunHolding[];
   asOf: number;
   currency: string;
   macroAvailable: boolean;
@@ -41,13 +50,33 @@ export async function runConviction(): Promise<ConvictionRun> {
   const rf = macro ? riskFreeRate(macro) : null;
 
   const positions = portfolio.positions.filter((p) => p.asset.assetClass !== "cash");
+  const heldIds = new Set(positions.map((p) => p.asset.id));
+
+  // Candidatos: la watchlist que no esta en cartera, con su precio en cache.
+  const watched = await db
+    .select({ asset: assets })
+    .from(watchlist)
+    .innerJoin(assets, eq(watchlist.assetId, assets.id))
+    .catch(() => [] as Array<{ asset: typeof assets.$inferSelect }>);
+  const candidates = watched.map((w) => w.asset).filter((a) => !heldIds.has(a.id) && a.assetClass !== "cash");
+  const candidateQuotes = await getCachedQuotes(candidates).catch(() => ({}) as Awaited<ReturnType<typeof getCachedQuotes>>);
+
+  type Target = {
+    asset: typeof assets.$inferSelect;
+    price: number;
+    position: { unrealizedPct: number; weight: number } | null;
+  };
+  const targets: Target[] = [
+    ...positions.map((p) => ({ asset: p.asset, price: p.price, position: { unrealizedPct: p.unrealizedPct, weight: p.weight } })),
+    ...candidates.map((a) => ({ asset: a, price: candidateQuotes[a.id]?.price ?? 0, position: null })),
+  ];
   const fmap = await getFundamentalsMap(
-    positions.filter((p) => p.asset.assetClass !== "crypto").map((p) => p.asset.id),
+    targets.filter((t) => t.asset.assetClass !== "crypto").map((t) => t.asset.id),
   );
 
   // Concurrencia baja: EDGAR hace varias peticiones por empresa (limite ~10/s).
-  const results = await batched(positions, 2, async (p) => {
-    const a = p.asset;
+  const results = await batched(targets, 2, async (t) => {
+    const a = t.asset;
     const fund = fmap.get(a.id) ?? null;
     let financials = null;
     if (a.assetClass !== "crypto" && a.cik) {
@@ -57,12 +86,12 @@ export async function runConviction(): Promise<ConvictionRun> {
       symbol: a.symbol,
       name: a.name,
       assetClass: a.assetClass,
-      price: p.price,
+      price: t.price > 0 ? t.price : null,
       fundamentals: fund?.metrics ?? null,
       earnings: fund?.earnings ?? [],
       financials,
       riskFreeRate: rf,
-      position: { unrealizedPct: p.unrealizedPct, weight: p.weight },
+      position: t.position,
     });
   });
 
@@ -75,6 +104,14 @@ export async function runConviction(): Promise<ConvictionRun> {
       price: p.price,
       value: p.value,
       weight: p.weight,
+    })),
+    candidates: candidates.map((a) => ({
+      symbol: a.symbol,
+      assetId: a.id,
+      assetClass: a.assetClass,
+      price: candidateQuotes[a.id]?.price ?? 0,
+      value: 0,
+      weight: 0,
     })),
     asOf: Date.now(),
     currency: portfolio.currency,
@@ -112,9 +149,11 @@ export async function runMonthlyPlan(opts: {
 
   const run = await runConviction();
 
-  // Lado bolsa: solo lo que no es cripto cuenta para pesos y candidatas.
+  // Lado bolsa: posiciones no cripto para los pesos; veredictos de esas
+  // posiciones y de los candidatos de la watchlist (que entran con valor 0).
   const equityHoldings = run.holdings.filter((h) => h.assetClass !== "crypto");
-  const equityVerdicts = run.results.filter((r) => equityHoldings.some((h) => h.symbol === r.symbol));
+  const cryptoSymbols = new Set(run.holdings.filter((h) => h.assetClass === "crypto").map((h) => h.symbol));
+  const equityVerdicts = run.results.filter((r) => !cryptoSymbols.has(r.symbol));
   const equity = allocate({
     cash: equityCash,
     holdings: equityHoldings.map((h) => ({ symbol: h.symbol, value: h.value })),
@@ -136,7 +175,7 @@ export async function runMonthlyPlan(opts: {
 
   let batchId: string | null = null;
   if (opts.save) {
-    const bySymbol = new Map(run.holdings.map((h) => [h.symbol, h]));
+    const bySymbol = new Map([...run.candidates, ...run.holdings].map((h) => [h.symbol, h]));
     const amountBySymbol = new Map(equity.lines.map((l) => [l.symbol, l.amount]));
     const bench = bySymbol.get("VOO") ?? bySymbol.get("SPY") ?? null;
     batchId = await recordBatch({
@@ -147,7 +186,7 @@ export async function runMonthlyPlan(opts: {
           result: r,
           assetId: h?.assetId ?? null,
           assetClass: h?.assetClass ?? "equity",
-          price: h?.price ?? null,
+          price: h && h.price > 0 ? h.price : null,
           planAmount: amountBySymbol.get(r.symbol) ?? null,
         };
       }),

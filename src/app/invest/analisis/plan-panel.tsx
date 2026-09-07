@@ -220,6 +220,7 @@ export function PlanCard({ onSaved }: { onSaved?: () => void }) {
                     <Badge tone={l.multiplier > 1 ? "up" : l.multiplier < 1 ? "warn" : "neutral"}>
                       {l.multiplier}x
                     </Badge>
+                    {!l.confirmed && <Badge tone="warn">escalera en pausa</Badge>}
                     <span className="min-w-0 flex-1 text-xs text-muted">
                       {l.reason}
                       {l.stats?.distToMaPct !== null && l.stats?.distToMaPct !== undefined && (

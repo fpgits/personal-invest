@@ -89,8 +89,8 @@ export type ConvictionResult = {
   fairValue: number | null;
   /** Rango bajista/base/alcista del DCF sobre FCF, si hay FCF. */
   fairRange: DcfRange | null;
-  /** Como se estimo: DCF sobre FCF, o PER justificado como respaldo. */
-  valuationMethod: "dcf" | "pe" | null;
+  /** Como se estimo: DCF sobre FCF, PER justificado, o la media de ambos (blend). */
+  valuationMethod: "dcf" | "pe" | "blend" | null;
   /** Crecimiento anual del FCF que el precio actual ya descuenta (DCF inverso), en %. */
   impliedGrowthPct: number | null;
   /** Margen de seguridad: (valor - precio) / valor, en %. Positivo = barato. */
@@ -560,7 +560,8 @@ export type FairValueDetail = {
   value: number | null;
   justifiedPe: number | null;
   range: DcfRange | null;
-  method: "dcf" | "pe" | null;
+  /** dcf: solo FCF; pe: solo multiplo de beneficios; blend: media de ambos. */
+  method: "dcf" | "pe" | "blend" | null;
   discountPct: number | null;
   impliedGrowthPct: number | null;
 };
@@ -575,51 +576,66 @@ const NO_FAIR: FairValueDetail = {
 };
 
 /**
- * Valor razonable por accion. Preferencia: DCF sobre FCF (caja real, tres
- * escenarios, mas el crecimiento implicito en el precio). Si no hay FCF,
- * respaldo por PER justificado sobre beneficios. En pico de ciclo se toma el
- * escenario bajista: valorar sobre beneficios de pico es la trampa clasica.
+ * Valor razonable por accion, triangulado. Un DCF sobre el FCF de HOY castiga
+ * sistematicamente a los compounders (crecen mas de diez anos y el capex de un
+ * ciclo de inversion les deprime el FCF presente); un multiplo sobre
+ * beneficios no ve la caja. Por eso, cuando existen los dos, el valor es la
+ * media: DCF a 10 anos sobre FCF + PER justificado sobre beneficios. Con uno
+ * solo, ese. En pico de ciclo, el DCF entra en escenario bajista: valorar
+ * sobre beneficios de pico es la trampa clasica.
  */
 export function fairValue(input: ConvictionInput): FairValueDetail {
   if (input.assetClass !== "equity") return NO_FAIR;
   const price = input.price;
   if (!isFin(price) || price <= 0) return NO_FAIR;
   const growth = growthEstimate(input) ?? 0;
+  const peak = peakCycle(input).flagged;
 
+  // Pata 1: DCF sobre FCF.
+  let dcfValue: number | null = null;
+  let range: DcfRange | null = null;
+  let discountPct: number | null = null;
+  let impliedGrowthPct: number | null = null;
   const fps = fcfPerShare(input.financials);
   if (isFin(fps) && fps > 0) {
-    const discountPct = discountRate(input.riskFreeRate, input.fundamentals?.beta ?? null);
-    const range = dcfRange({ fcfPerShare: fps, growthPct: growth, discountPct });
+    discountPct = discountRate(input.riskFreeRate, input.fundamentals?.beta ?? null);
+    range = dcfRange({ fcfPerShare: fps, growthPct: growth, discountPct });
     if (range) {
-      const peak = peakCycle(input).flagged;
-      return {
-        value: peak ? range.bear : range.base,
-        justifiedPe: null,
-        range,
-        method: "dcf",
-        discountPct,
-        impliedGrowthPct: reverseDcf(price, { fcfPerShare: fps, discountPct }),
-      };
+      dcfValue = peak ? range.bear : range.base;
+      impliedGrowthPct = reverseDcf(price, { fcfPerShare: fps, discountPct });
     }
   }
 
-  // Respaldo: PER justificado. Beneficios TTM distorsionados -> sin valor.
-  if (!earningsReliable(input.fundamentals)) return NO_FAIR;
-  const pe = input.fundamentals?.pe ?? null;
-  // BPA TTM: si hay PER y precio, es precio/PER; si no, ultimo BPA anual EDGAR.
-  const epsTtm = isFin(pe) && pe > 0 ? price / pe : input.financials?.years.at(-1)?.eps ?? null;
-  if (!isFin(epsTtm) || epsTtm <= 0) return NO_FAIR;
-  const required = (isFin(input.riskFreeRate) ? input.riskFreeRate : 4.0) + EQUITY_RISK_PREMIUM;
-  const noGrowthPe = 100 / required;
-  const justifiedPe = Math.max(PE_FLOOR, Math.min(PE_CEIL, noGrowthPe + Math.max(0, growth) * PEG_PREMIUM_K));
-  return {
-    value: round(epsTtm * justifiedPe, 2),
-    justifiedPe: round(justifiedPe, 1),
-    range: null,
-    method: "pe",
-    discountPct: null,
-    impliedGrowthPct: null,
-  };
+  // Pata 2: PER justificado sobre beneficios (si son fiables).
+  let peValue: number | null = null;
+  let justifiedPe: number | null = null;
+  if (earningsReliable(input.fundamentals)) {
+    const pe = input.fundamentals?.pe ?? null;
+    // BPA TTM: si hay PER y precio, es precio/PER; si no, ultimo BPA anual EDGAR.
+    const epsTtm = isFin(pe) && pe > 0 ? price / pe : input.financials?.years.at(-1)?.eps ?? null;
+    if (isFin(epsTtm) && epsTtm > 0) {
+      const required = (isFin(input.riskFreeRate) ? input.riskFreeRate : 4.0) + EQUITY_RISK_PREMIUM;
+      const noGrowthPe = 100 / required;
+      // En pico de ciclo el BPA tambien esta inflado: multiplo sin prima de crecimiento.
+      justifiedPe = Math.max(
+        PE_FLOOR,
+        Math.min(PE_CEIL, noGrowthPe + (peak ? 0 : Math.max(0, growth) * PEG_PREMIUM_K)),
+      );
+      peValue = round(epsTtm * justifiedPe, 2);
+      justifiedPe = round(justifiedPe, 1);
+    }
+  }
+
+  if (dcfValue === null && peValue === null) return NO_FAIR;
+  const value =
+    dcfValue !== null && peValue !== null ? round((dcfValue + peValue) / 2, 2) : ((dcfValue ?? peValue) as number);
+  const method: FairValueDetail["method"] = dcfValue !== null && peValue !== null ? "blend" : dcfValue !== null ? "dcf" : "pe";
+  // El rango se reescala al valor final para que bajista < valor < alcista siga siendo cierto.
+  const scaledRange =
+    range && dcfValue !== null && dcfValue > 0
+      ? { bear: round((range.bear * value) / dcfValue, 2), base: value, bull: round((range.bull * value) / dcfValue, 2) }
+      : null;
+  return { value, justifiedPe, range: scaledRange, method, discountPct, impliedGrowthPct };
 }
 
 // ---------------------------------------------------------------------------
@@ -645,14 +661,21 @@ function candidatePosture(score: number): Posture {
  * deterioro (puntuacion baja) piden reducir o vender aunque el negocio sea
  * bueno. Esto es el lado "que vender".
  */
+/** Sobrevaloracion a partir de la cual se recorta aunque el negocio sea excelente. */
+export const TRIM_UPSIDE_EGREGIOUS = -45;
+/** Sobrevaloracion a partir de la cual se recorta un negocio mediocre. */
+export const TRIM_UPSIDE_MEDIOCRE = -25;
+
 function heldPosture(score: number, upsidePct: number | null): Posture {
   if (score < 30) return "sell";
   if (score < 42) return "reduce";
-  // Buen negocio pero caro: recoger.
-  if (isFin(upsidePct) && upsidePct < -30) return "reduce";
+  // Un gran negocio caro se mantiene sin anadir; solo se recorta si la
+  // sobrevaloracion es exagerada. Vender ganadores por un modelo es la forma
+  // mas cara de tener razon.
+  if (isFin(upsidePct) && upsidePct <= TRIM_UPSIDE_EGREGIOUS) return "reduce";
   if (score >= 72 && (upsidePct === null || upsidePct > -10)) return "buy";
   if (score >= 60) return "hold";
-  if (isFin(upsidePct) && upsidePct < -15) return "reduce";
+  if (isFin(upsidePct) && upsidePct <= TRIM_UPSIDE_MEDIOCRE) return "reduce";
   return "hold";
 }
 

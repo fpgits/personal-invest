@@ -263,7 +263,7 @@ console.log("\n# FCF: valor razonable por DCF, rango y crecimiento implicito");
   };
   inRange(fcfPerShare(input.financials), 9.9, 10.1, "FCF por accion");
   const r = evaluate(input);
-  truthy(r.valuationMethod === "dcf", `valora por DCF (${r.valuationMethod})`);
+  truthy(r.valuationMethod === "blend", `valora por DCF + multiplo (${r.valuationMethod})`);
   truthy(r.fairRange !== null && r.fairRange.bear < r.fairRange.base && r.fairRange.base < r.fairRange.bull, "rango bajista < base < alcista");
   truthy(r.impliedGrowthPct !== null, `crecimiento implicito calculado (${r.impliedGrowthPct}%)`);
   truthy(r.marginOfSafetyPct !== null, `margen de seguridad calculado (${r.marginOfSafetyPct}%)`);

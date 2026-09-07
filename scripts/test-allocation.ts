@@ -5,7 +5,7 @@
  * Correr con: npm run test:allocation
  */
 import { allocate, attractiveness, targetWeights } from "../src/lib/allocation";
-import { cryptoPlan, cycleMultiplier, cycleStats, parseCore } from "../src/lib/crypto-cycle";
+import { cryptoPlan, cycleMultiplier, cycleStats, daysSinceNewLow, ladderFor, parseCore } from "../src/lib/crypto-cycle";
 import type { ConvictionResult } from "../src/lib/conviction";
 import type { Posture } from "../src/lib/conviction-labels";
 
@@ -29,6 +29,16 @@ function inRange(v: number | null | undefined, lo: number, hi: number, label: st
     console.error(`  FALLO ${label}: ${v} no esta en [${lo}, ${hi}]`);
   } else {
     console.log(`  ok  ${label} (${v})`);
+  }
+}
+
+function eq<T>(actual: T, expected: T, label: string) {
+  checks++;
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    failures++;
+    console.error(`  FALLO ${label}: esperado ${JSON.stringify(expected)}, obtenido ${JSON.stringify(actual)}`);
+  } else {
+    console.log(`  ok  ${label}`);
   }
 }
 
@@ -146,24 +156,79 @@ console.log("\n# allocate: ticket minimo");
   truthy(none.lines.length === 0 && none.reserve === 300, "por debajo del ticket, todo a reserva");
 }
 
-console.log("\n# cripto: cycleStats y cycleMultiplier");
+// Camino tipico de ciclo: sube a 126k, cae a 45k, y luego se queda plano.
+function cyclePath(opts: { downTo?: number; flatDays?: number } = {}): number[] {
+  const downTo = opts.downTo ?? 45000;
+  const p: number[] = [];
+  for (let i = 0; i < 500; i++) p.push(40000 + (126000 - 40000) * (i / 499));
+  for (let i = 1; i <= 250; i++) p.push(126000 + (downTo - 126000) * (i / 250));
+  for (let i = 0; i < (opts.flatDays ?? 0); i++) p.push(downTo);
+  return p;
+}
+
+console.log("\n# cripto: cycleStats usa el maximo HISTORICO, no el del ano");
 {
-  const flat = Array.from({ length: 365 }, () => 100);
-  const s = cycleStats(flat)!;
-  inRange(s.distToMaPct, -0.01, 0.01, "plano: 0% sobre la media");
-  truthy(cycleMultiplier(s).multiplier === 1, "plano -> 1x");
-
-  const crash = [...Array.from({ length: 300 }, () => 100), ...Array.from({ length: 65 }, () => 45)];
-  const sc = cycleStats(crash)!;
-  inRange(sc.drawdownPct, -56, -54, "caida del 55% desde el maximo");
-  truthy(cycleMultiplier(sc).multiplier === 1.5, "caida profunda -> 1.5x");
-
-  const euphoria = [...Array.from({ length: 300 }, () => 100), ...Array.from({ length: 65 }, (_, i) => 100 + i * 2)];
-  const se = cycleStats(euphoria)!;
-  truthy((se.distToMaPct ?? 0) > 20, `sobreextendido: ${se.distToMaPct}% sobre la media`);
-  truthy(cycleMultiplier(se).multiplier < 1, "sobreextendido -> menos de 1x");
-  truthy(cycleMultiplier(null).multiplier === 1, "sin datos -> 1x");
+  const s = cycleStats(cyclePath({ flatDays: 30 }))!;
+  inRange(s.ath, 125999, 126001, "maximo historico");
+  inRange(s.drawdownPct, -64.5, -64, "caida desde el maximo historico");
+  truthy(s.days > 500 && !s.shallowHistory, `historia larga (${s.days} dias)`);
+  truthy((s.athDaysAgo ?? 0) > 250, "sabe hace cuanto fue el maximo");
   truthy(cycleStats([]) === null, "sin cierres -> null");
+  const corto = cycleStats(Array.from({ length: 200 }, (_, i) => 100 + i))!;
+  truthy(corto.shallowHistory, "menos de 2 anos se marca como historico corto");
+}
+
+console.log("\n# cripto: daysSinceNewLow (un precio plano NO es minimo nuevo)");
+{
+  const cayendo = cyclePath();
+  eq(daysSinceNewLow(cayendo), 0, "el ultimo dia de la caida marca minimo nuevo");
+  eq(daysSinceNewLow(cyclePath({ flatDays: 30 })), 30, "30 dias planos = 30 dias sin minimos nuevos");
+  truthy(daysSinceNewLow(Array.from({ length: 50 }, () => 100)) === null, "sin historia suficiente -> null");
+}
+
+console.log("\n# cripto: escalera por profundidad");
+{
+  eq(ladderFor(-5).multiplier, 0.5, "a menos del 10% del maximo: aportar la mitad y guardar");
+  eq(ladderFor(-20).multiplier, 1, "caida moderada: aporte normal");
+  eq(ladderFor(-40).multiplier, 1.25, "-40% -> 1.25x");
+  eq(ladderFor(-55).multiplier, 1.5, "-55% -> 1.5x");
+  eq(ladderFor(-70).multiplier, 1.75, "-70% -> 1.75x");
+  eq(ladderFor(-80).multiplier, 2, "-80% -> 2x");
+}
+
+console.log("\n# REGRESION: mientras siga cayendo NO se sube el aporte (no atrapar el cuchillo)");
+{
+  // El fallo original: de -31% a -65% el multiplicador solo subia. Ahora, con
+  // minimos nuevos cada dia, se queda en aporte normal y guarda la reserva.
+  const puntos = [650, 680, 710, 740];
+  for (const d of puntos) {
+    const s = cycleStats(cyclePath().slice(0, d))!;
+    const dec = cycleMultiplier(s);
+    truthy(
+      dec.multiplier === 1 && !dec.confirmed,
+      `dia ${d} (caida ${s.drawdownPct}%): aporte normal y tramo retenido (dio ${dec.multiplier}x, escalera pedia ${dec.ladderMultiplier}x)`,
+    );
+  }
+  const hondo = cycleMultiplier(cycleStats(cyclePath().slice(0, 740))!);
+  truthy(hondo.ladderMultiplier > 1 && hondo.reason.includes("mínimos nuevos"), "explica que espera a que pare la caida");
+}
+
+console.log("\n# REGRESION: un precio plano NO borra la caida (la ventana ya no es movil)");
+{
+  // El fallo original: plano en 45k durante un ano -> la caida "anual" pasaba
+  // de -64% a 0% sin moverse el precio. Con el maximo historico, no.
+  const s = cycleStats(cyclePath({ flatDays: 365 }))!;
+  inRange(s.drawdownPct, -64.5, -64, "sigue a -64% del maximo despues de un ano plano");
+  const dec = cycleMultiplier(s);
+  truthy(dec.confirmed && dec.multiplier === 1.5, `al dejar de caer se suelta el tramo (${dec.multiplier}x)`);
+}
+
+console.log("\n# cripto: cerca del maximo se guarda munición");
+{
+  const casiMax = [...cyclePath().slice(0, 500), ...Array.from({ length: 120 }, () => 122000)];
+  const dec = cycleMultiplier(cycleStats(casiMax)!);
+  eq(dec.multiplier, 0.5, "a menos del 10% del maximo: medio aporte");
+  truthy(dec.reason.includes("guardar reserva"), "y lo dice");
 }
 
 console.log("\n# cripto: parseCore y cryptoPlan");
@@ -174,17 +239,20 @@ console.log("\n# cripto: parseCore y cryptoPlan");
   truthy(parseCore("basura").length === 0, "ignora entradas invalidas");
 
   const stats = new Map([
-    ["BTC", cycleStats(Array.from({ length: 365 }, () => 100))],
-    ["ETH", cycleStats([...Array.from({ length: 300 }, () => 100), ...Array.from({ length: 65 }, () => 45)])],
+    ["BTC", cycleStats(cyclePath({ flatDays: 30 }))],      // -64%, ya no cae -> 1.5x
+    ["ETH", cycleStats(cyclePath())],                       // -64%, sigue cayendo -> 1x retenido
   ]);
   const plan = cryptoPlan(2500, core, stats);
   const btc = plan.lines.find((l) => l.symbol === "BTC")!;
   const eth = plan.lines.find((l) => l.symbol === "ETH")!;
-  truthy(btc.amount === 1500 && btc.multiplier === 1, "BTC 60% a 1x = 1500");
-  truthy(eth.amount === 1500 && eth.multiplier === 1.5, "ETH 40% a 1.5x = 1500");
-  truthy(plan.reserve === 0 && plan.extra === 500, "pide 500 extra (no asume reserva)");
-  const calm = cryptoPlan(2500, core, new Map([["BTC", stats.get("BTC")!], ["ETH", cycleStats([...Array.from({ length: 300 }, () => 100), ...Array.from({ length: 65 }, (_, i) => 100 + i * 2)])]]));
-  truthy(calm.reserve > 0, `sobreextendido: parte queda en reserva (${calm.reserve})`);
+  eq(btc.amount, 2250, "BTC 60% x1.5 = 2250");
+  eq(eth.amount, 1000, "ETH 40% x1 (retenido) = 1000");
+  truthy(!eth.confirmed && eth.ladderMultiplier === 1.5, "ETH: la escalera pedia 1.5x pero esta retenida");
+  truthy(plan.holding, "el plan avisa de que hay tramos retenidos");
+  eq(plan.extra, 750, "pide 750 extra sobre el efectivo del mes");
+
+  const tranquilo = cryptoPlan(2500, core, new Map([["BTC", null], ["ETH", null]]));
+  truthy(tranquilo.lines.every((l) => l.multiplier === 1) && !tranquilo.holding, "sin datos: aporte normal");
 }
 
 console.log(`\n${failures === 0 ? "OK" : "FALLOS"}: ${checks - failures}/${checks} comprobaciones`);

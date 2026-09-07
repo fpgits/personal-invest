@@ -197,7 +197,7 @@ function VerdictRow({ r, currency }: { r: ConvictionResult; currency: string }) 
                     </div>
                   )}
                   <div className="text-[10px] text-faint">
-                    {r.valuationMethod === "dcf" ? "DCF sobre FCF" : "PER justificado"}
+                    {r.valuationMethod === "blend" ? "DCF + múltiplo" : r.valuationMethod === "dcf" ? "DCF sobre FCF" : "PER justificado"}
                     {r.impliedGrowthPct !== null && ` · descuenta ${r.impliedGrowthPct >= 100 ? ">100" : r.impliedGrowthPct}%/a`}
                   </div>
                 </>

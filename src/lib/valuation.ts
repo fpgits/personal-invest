@@ -8,8 +8,14 @@
  */
 
 export const DEFAULT_ERP = 4.5;
-export const DEFAULT_TERMINAL_GROWTH = 2.5;
-export const DEFAULT_YEARS = 5;
+/** Crecimiento perpetuo tras la etapa de crecimiento: PIB nominal, mas o menos. */
+export const DEFAULT_TERMINAL_GROWTH = 3.0;
+/**
+ * Anos de la etapa de crecimiento con decaimiento. Diez, no cinco: un buen
+ * negocio compone mas de un lustro, y con cinco el modelo castiga a todos los
+ * compounders de larga duracion.
+ */
+export const DEFAULT_YEARS = 10;
 /** El crecimiento de la primera etapa se acota: nadie compone FCF al 60% cinco anos. */
 export const STAGE_GROWTH_MIN = -10;
 export const STAGE_GROWTH_MAX = 30;

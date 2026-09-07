@@ -17,13 +17,13 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-/** Verbo y color por accion. */
+/** Verbo y color por acción. */
 const ACTION: Record<BriefAction, { label: string; cls: string }> = {
   comprar: { label: "Compra", cls: "bg-up text-white" },
   vender: { label: "Vende", cls: "bg-down text-white" },
   reducir: { label: "Reduce", cls: "bg-warn text-white" },
   revisar: { label: "Revisa", cls: "bg-warn text-white" },
-  buena_senal: { label: "A favor", cls: "bg-up text-white" },
+  buena_senal: { label: "Buena señal", cls: "bg-up text-white" },
   esperar: { label: "Espera", cls: "bg-surface-2 text-muted border border-border" },
   vigilar: { label: "Vigila", cls: "bg-surface-2 text-muted border border-border" },
 };
@@ -51,8 +51,8 @@ function Item({ it }: { it: BriefItem }) {
 }
 
 /**
- * La tarjeta "Que hacer". `compact` para el Resumen (lo esencial y un enlace);
- * completa para su pagina.
+ * La tarjeta "Qué hacer". `compact` para el Resumen (lo esencial y un enlace);
+ * completa para su página.
  */
 export function BriefCard({ compact = false }: { compact?: boolean }) {
   const { data, error, isLoading, mutate, isValidating } = useSWR<Brief>(api("/api/brief"), fetcher, {
@@ -83,7 +83,7 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
       <Card className="mb-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wide text-faint">Que hacer</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-faint">Qué hacer</p>
             <p className="mt-1 text-base font-medium leading-snug">{data.summary}</p>
           </div>
           <Link
@@ -121,7 +121,7 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
           </button>
         </div>
         <p className="mt-2 text-xs text-faint">
-          Calculado {fmtDateTime(data.generatedAt)} con tus numeros reales. Es apoyo a tu criterio, no una orden; la app no
+          Calculado {fmtDateTime(data.generatedAt)} con tus números reales. Es apoyo a tu criterio, no una orden; la app no
           opera.
         </p>
       </Card>
@@ -150,6 +150,7 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
                     {l.symbol} <span className="tnum">{money(l.amount, data.currency)}</span>
+                    {l.isNew && <span className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted">nueva</span>}
                   </p>
                   <p className="mt-0.5 text-sm text-muted">{l.why}</p>
                 </div>
@@ -184,20 +185,28 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
                 ))}
               </ul>
             )}
+            {month.crypto.holding && (
+              <p className="mt-2 text-sm">
+                <span className="font-medium">Escalera en pausa:</span>{" "}
+                <span className="text-muted">
+                  el precio sigue marcando mínimos nuevos. Se aporta lo normal y la munición se guarda para más abajo.
+                </span>
+              </p>
+            )}
             {month.crypto.reserve > 0 && (
               <p className="mt-2 text-sm text-muted">
-                Deja {money(month.crypto.reserve, data.currency)} en stablecoin para la proxima caida.
+                Deja {money(month.crypto.reserve, data.currency)} en stablecoin para la próxima caída.
               </p>
             )}
             {month.crypto.extra > 0 && (
               <p className="mt-2 text-sm text-warn">
-                El ciclo pediria {money(month.crypto.extra, data.currency)} mas de lo habitual: solo si tienes reserva.
+                El ciclo pediría {money(month.crypto.extra, data.currency)} más de lo habitual: solo si tienes reserva.
               </p>
             )}
           </div>
         )}
         <p className="mt-4 text-xs text-faint">
-          Para cambiar cuanto aportas o que tan exigente eres: Ajustes → Oraculo. Para el detalle y guardar la llamada del
+          Para cambiar cuánto aportas o qué tan exigente eres: Ajustes → Oráculo. Para el detalle y guardar la llamada del
           mes: <Link href="/invest/analisis" className="underline">Analisis → Veredicto</Link>.
         </p>
       </Card>

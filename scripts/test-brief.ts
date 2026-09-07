@@ -95,11 +95,12 @@ const base: BriefInput = {
     crypto: {
       cash: 2500,
       lines: [
-        { symbol: "BTC", amount: 1500, base: 1500, multiplier: 1, reason: "precio cerca de su media: aporte normal", stats: null },
-        { symbol: "ETH", amount: 800, base: 1000, multiplier: 0.8, reason: "25% por encima de la media de 200 dias: aportar algo menos", stats: null },
+        { symbol: "BTC", amount: 1500, base: 1500, multiplier: 1, ladderMultiplier: 1, confirmed: true, reason: "35% por debajo del máximo histórico: aporte normal", stats: null },
+        { symbol: "ETH", amount: 800, base: 1000, multiplier: 0.8, ladderMultiplier: 0.8, confirmed: true, reason: "a menos del 10% del máximo histórico: aportar menos y guardar reserva", stats: null },
       ],
       reserve: 200,
       extra: 0,
+      holding: false,
     },
   },
   events: [
@@ -114,6 +115,9 @@ const base: BriefInput = {
     { symbol: "ZZZ", at: NOW + 3 * DAY },
   ],
   pendingProposals: 2,
+  thesisStatus: [],
+  watchTargets: [],
+  macro: null,
 };
 
 console.log("\n# esta semana");
@@ -173,6 +177,51 @@ console.log("\n# semana tranquila");
   truthy(quiet.week.headline.includes("no hay nada urgente"), `titular tranquilo: ${quiet.week.headline}`);
   const noBuys = buildBrief({ ...quiet && base, results: [verdict("NVDA", "hold", 60, 0, 0)], events: [], pendingProposals: 0, earnings: [], plan: { ...base.plan, equity: { ...base.plan.equity, lines: [], reserve: 4000, reserveReason: "Nada supera el umbral" } } });
   truthy(noBuys.month.headline.includes("no compres nada en bolsa") && noBuys.month.headline.includes("SGOV"), `mes sin compras: ${noBuys.month.headline}`);
+}
+
+console.log("\n# se alimenta de todas las fuentes (registro de proveedores)");
+{
+  const rich = buildBrief({
+    ...base,
+    thesisStatus: [
+      { symbol: "STX", atRisk: 0, broken: 2 },
+      { symbol: "IBM", atRisk: 1, broken: 0 },
+    ],
+    watchTargets: [
+      { symbol: "KVYO", targetPrice: 20, direction: "below", price: 18 },
+      { symbol: "IBM", targetPrice: 200, direction: "above", price: 235 },
+      { symbol: "ABT", targetPrice: 90, direction: "below", price: 108 },
+    ],
+    macro: { tenY: 5.2, spread10y2y: -0.4 },
+  });
+  const srcs = rich.sources;
+  truthy(srcs.includes("veredicto") && srcs.includes("eventos") && srcs.includes("propuestas"), `fuentes base (${srcs.join(", ")})`);
+  truthy(srcs.includes("tesis") && srcs.includes("watchlist") && srcs.includes("macro"), "fuentes nuevas aportan");
+  truthy(rich.week.items.some((i) => i.symbol === "STX" && i.title.includes("supuestos rotos")), "tesis rota entra en la semana");
+  truthy(rich.watch.items.some((i) => i.symbol === "IBM" && i.title.includes("en riesgo")), "supuesto en riesgo va a vigilar");
+  truthy(rich.week.items.some((i) => i.symbol === "KVYO" && i.action === "comprar"), "precio objetivo alcanzado por abajo → comprar");
+  truthy(!rich.week.items.some((i) => i.symbol === "ABT" && i.action === "comprar"), "objetivo no alcanzado no dispara");
+  truthy(rich.watch.items.some((i) => i.title.includes("curva de tipos")), "macro: curva invertida");
+  truthy(rich.watch.items.some((i) => i.title.includes("10 años")), "macro: bono alto");
+  truthy(!/P[1-5]\b|score|tier/i.test(JSON.stringify(rich.week)), "sigue sin jerga");
+}
+
+console.log("\n# candidato nuevo de la watchlist en el plan del mes");
+{
+  const withNew = buildBrief({
+    ...base,
+    results: [...base.results, verdict("CRM", "strong_buy", 80, 30, 43)],
+    plan: {
+      ...base.plan,
+      equity: {
+        ...base.plan.equity,
+        lines: [{ symbol: "CRM", amount: 4000, score: 80, posture: "strong_buy", marginOfSafetyPct: 30, weightBefore: 0, weightAfter: 5.4, reason: "r" }],
+      },
+    },
+  });
+  const line = withNew.month.equity.lines[0];
+  truthy(line.isNew && line.why.includes("Nueva en cartera"), `marca la nueva (${line.why})`);
+  truthy(withNew.week.items.some((i) => i.symbol === "CRM" && i.title.includes("watchlist")), "la oportunidad dice que viene de la watchlist");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);
