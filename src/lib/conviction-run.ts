@@ -190,6 +190,21 @@ export async function runMonthlyPlan(opts: {
           planAmount: amountBySymbol.get(r.symbol) ?? null,
         };
       }),
+      // El lado cripto se registra tambien: si no, la escalera no se puede
+      // medir nunca y seria la unica parte del oraculo sin marcador.
+      cycleItems: crypto.lines.map((l) => ({
+        symbol: l.symbol,
+        assetId: bySymbol.get(l.symbol)?.assetId ?? null,
+        posture: l.posture,
+        multiplier: l.multiplier,
+        ladderMultiplier: l.ladderMultiplier,
+        confirmed: l.confirmed,
+        price: l.stats?.price ?? null,
+        ath: l.stats?.ath ?? null,
+        drawdownPct: l.stats?.drawdownPct ?? null,
+        planAmount: l.amount,
+        reason: l.reason,
+      })),
       benchmark: bench ? { symbol: bench.symbol, assetId: bench.assetId, price: bench.price } : null,
     });
   }

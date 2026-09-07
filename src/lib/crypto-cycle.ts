@@ -161,6 +161,30 @@ export function cycleMultiplier(s: CycleStats | null): CycleDecision {
   };
 }
 
+/**
+ * Postura de ciclo. Vocabulario propio a propósito: si reutilizara
+ * comprar/mantener/reducir de la bolsa, las llamadas de cripto se mezclarían
+ * con las de acciones en la tabla de aciertos y ninguna de las dos se podría
+ * leer. Se miden aparte porque se aciertan distinto: en un aporte extra
+ * acertar es que subiera; en un tramo retenido, que siguiera cayendo.
+ */
+export type CyclePosture = "cycle_extra" | "cycle_normal" | "cycle_light" | "cycle_hold";
+
+export const CYCLE_POSTURE_LABEL: Record<CyclePosture, string> = {
+  cycle_extra: "Aporte extra",
+  cycle_normal: "Aporte normal",
+  cycle_light: "Aporte reducido",
+  cycle_hold: "Tramo retenido",
+};
+
+/** Puro. */
+export function cyclePosture(d: Pick<CycleDecision, "multiplier" | "confirmed">): CyclePosture {
+  if (!d.confirmed) return "cycle_hold";
+  if (d.multiplier > 1) return "cycle_extra";
+  if (d.multiplier < 1) return "cycle_light";
+  return "cycle_normal";
+}
+
 export type CoreWeight = { symbol: string; weightPct: number };
 
 /** "BTC:60,ETH:40" -> pesos normalizados a 100. Ignora entradas inválidas. */
@@ -187,6 +211,7 @@ export type CryptoLine = {
   multiplier: number;
   ladderMultiplier: number;
   confirmed: boolean;
+  posture: CyclePosture;
   reason: string;
   stats: CycleStats | null;
 };
@@ -226,6 +251,7 @@ export function cryptoPlan(
       multiplier: d.multiplier,
       ladderMultiplier: d.ladderMultiplier,
       confirmed: d.confirmed,
+      posture: cyclePosture(d),
       reason: d.reason,
       stats,
     };

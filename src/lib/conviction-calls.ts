@@ -3,14 +3,21 @@ import { db } from "@/db";
 import { assets, convictionCalls, priceCache, type ConvictionCall } from "@/db/schema";
 import type { ConvictionResult } from "./conviction";
 import type { Posture } from "./conviction-labels";
+import { cycleStatsFor, CYCLE_POSTURE_LABEL, type CyclePosture } from "./crypto-cycle";
 import { id } from "./utils";
 
 /**
- * Registro y medicion de las llamadas del oraculo. Cada veredicto y cada
- * linea de plan se guarda con su precio; el job nocturno rellena el retorno
- * a 30/90/180/365 dias con el precio en cache del momento en que se cumple
- * el plazo. Con eso se mide tasa de acierto por postura, retorno medio, y
- * como lo habria hecho el indice (fila `benchmark`) en el mismo periodo.
+ * Registro y medicion de las llamadas del oraculo. Cada veredicto, cada linea
+ * de plan y cada decision de ciclo de cripto se guarda con su precio; el job
+ * nocturno rellena el retorno a 30/90/180/365 dias con el precio del momento
+ * en que se cumple el plazo. Con eso se mide tasa de acierto por postura,
+ * retorno medio, y como lo habria hecho el indice (fila `benchmark`) en el
+ * mismo periodo.
+ *
+ * Bolsa y cripto se miden POR SEPARADO (kind `plan`/`verdict` frente a
+ * `cycle`). No es cosmetico: en bolsa acertar una compra es que subiera,
+ * mientras que en cripto acertar un tramo retenido es justo lo contrario, que
+ * siguiera cayendo. Mezclarlos daria una tabla que no significa nada.
  */
 
 export const HORIZONS = [30, 90, 180, 365] as const;
@@ -25,12 +32,35 @@ export type CallItem = {
   planAmount?: number | null;
 };
 
+/**
+ * Una decision de ciclo de cripto, para poder medirla despues. Reusa las
+ * columnas de conviction_calls sin migracion: `score` guarda el multiplicador
+ * aplicado x100, `fairValue` el maximo historico de referencia y `upsidePct`
+ * la caida desde ese maximo (el analogo cripto de "cuanto por debajo de lo que
+ * vale esta").
+ */
+export type CycleCallItem = {
+  symbol: string;
+  assetId: string | null;
+  posture: CyclePosture;
+  multiplier: number;
+  ladderMultiplier: number;
+  confirmed: boolean;
+  price: number | null;
+  ath: number | null;
+  drawdownPct: number | null;
+  planAmount: number | null;
+  reason: string;
+};
+
 export type Benchmark = { symbol: string; assetId: string | null; price: number | null };
 
 /** Guarda una corrida completa. Devuelve el id del lote. */
 export async function recordBatch(args: {
   kind: "verdict" | "plan";
   items: CallItem[];
+  /** Lineas de cripto de la misma corrida, guardadas con kind `cycle`. */
+  cycleItems?: CycleCallItem[];
   benchmark?: Benchmark | null;
   now?: number;
 }): Promise<string> {
@@ -74,6 +104,28 @@ export async function recordBatch(args: {
       calledAt: now,
     });
   }
+  for (const c of args.cycleItems ?? []) {
+    rows.push({
+      id: id(),
+      batchId,
+      kind: "cycle" as const,
+      assetId: c.assetId,
+      symbol: c.symbol,
+      assetClass: "crypto",
+      posture: c.posture,
+      score: c.multiplier * 100,
+      // La confianza es literal aqui: 100 = la escalera solto el tramo,
+      // 0 = esta retenido esperando que pare la caida.
+      confidence: c.confirmed ? 100 : 0,
+      price: c.price,
+      fairValue: c.ath,
+      upsidePct: c.drawdownPct,
+      marginOfSafetyPct: null,
+      planAmount: c.planAmount,
+      rationale: c.reason,
+      calledAt: now,
+    });
+  }
   if (rows.length > 0) await db.insert(convictionCalls).values(rows);
   return batchId;
 }
@@ -83,7 +135,17 @@ export async function recordBatch(args: {
  * solo toca horizontes ya cumplidos que sigan en null. Devuelve cuantas
  * filas se actualizaron.
  */
-export async function markForwardReturns(now = Date.now()): Promise<number> {
+/** Precio actual de una cripto del nucleo, aunque no este en la cartera. */
+async function cyclePrice(symbol: string): Promise<number | null> {
+  const s = await cycleStatsFor(symbol).catch(() => null);
+  return s && s.price > 0 ? s.price : null;
+}
+
+export async function markForwardReturns(
+  now = Date.now(),
+  /** Inyectable para poder probarlo sin red. */
+  resolveCryptoPrice: (symbol: string) => Promise<number | null> = cyclePrice,
+): Promise<number> {
   const due = await db
     .select()
     .from(convictionCalls)
@@ -117,6 +179,15 @@ export async function markForwardReturns(now = Date.now()): Promise<number> {
       .innerJoin(assets, eq(priceCache.assetId, assets.id))
       .where(inArray(assets.symbol, syms));
     for (const r of rows) if (r.assetClass !== "crypto" || !symbolPrice.has(r.symbol)) symbolPrice.set(r.symbol, r.price);
+  }
+  // BTC/ETH del nucleo pueden no estar en la cartera ni en la cache de
+  // precios: sin esto sus llamadas nunca vencerian y el modelo de ciclo
+  // seria inmedible. Se resuelven contra el mismo historico que los decide.
+  for (const sym of new Set(
+    missing.filter((m) => m.assetClass === "crypto" && !symbolPrice.has(m.symbol)).map((m) => m.symbol),
+  )) {
+    const p = await resolveCryptoPrice(sym);
+    if (p !== null) symbolPrice.set(sym, p);
   }
 
   let updated = 0;
@@ -166,7 +237,8 @@ const SELL: Posture[] = ["reduce", "sell", "avoid"];
 
 export function summarizeCalls(rows: ConvictionCall[]): PostureStats[] {
   const groups = new Map<string, ConvictionCall[]>();
-  for (const r of rows) {
+  // Las llamadas de ciclo se miden aparte (summarizeCycleCalls).
+  for (const r of rows.filter((r) => r.kind !== "cycle")) {
     const key = r.kind === "benchmark" ? "benchmark" : r.posture;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
@@ -194,6 +266,56 @@ export function summarizeCalls(rows: ConvictionCall[]): PostureStats[] {
   }
   const order = ["strong_buy", "buy", "hold", "reduce", "sell", "avoid", "no_coverage", "benchmark"];
   return out.sort((a, b) => order.indexOf(a.posture) - order.indexOf(b.posture));
+}
+
+export type CycleStatsRow = {
+  posture: CyclePosture;
+  label: string;
+  n: number;
+  avg: Record<Horizon, number | null>;
+  counts: Record<Horizon, number>;
+  /**
+   * Acertar depende de lo que dijimos: en un aporte extra o normal, que
+   * subiera; en un aporte reducido cerca del maximo y en un tramo retenido,
+   * que cayera (era justo lo que decia que iba a poder pasar).
+   */
+  hitRate: Record<Horizon, number | null>;
+};
+
+const CYCLE_UP: CyclePosture[] = ["cycle_extra", "cycle_normal"];
+const CYCLE_DOWN: CyclePosture[] = ["cycle_light", "cycle_hold"];
+const CYCLE_ORDER: CyclePosture[] = ["cycle_extra", "cycle_normal", "cycle_hold", "cycle_light"];
+
+/**
+ * Mide el modelo de ciclo. Sin esta tabla la escalera es una opinion: aqui es
+ * donde se ve si retener el tramo mientras seguia cayendo valio la pena, o si
+ * habria sido mejor comprar y ya.
+ */
+export function summarizeCycleCalls(rows: ConvictionCall[]): CycleStatsRow[] {
+  const groups = new Map<CyclePosture, ConvictionCall[]>();
+  for (const r of rows.filter((r) => r.kind === "cycle")) {
+    const key = r.posture as CyclePosture;
+    if (!CYCLE_ORDER.includes(key)) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  const out: CycleStatsRow[] = [];
+  for (const [key, list] of groups) {
+    const avg = {} as Record<Horizon, number | null>;
+    const counts = {} as Record<Horizon, number>;
+    const hitRate = {} as Record<Horizon, number | null>;
+    for (const h of HORIZONS) {
+      const vals = list.map((r) => retAt(r, h)).filter((v): v is number => v !== null);
+      counts[h] = vals.length;
+      avg[h] = vals.length ? round(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+      if (vals.length === 0) hitRate[h] = null;
+      else if (CYCLE_UP.includes(key)) hitRate[h] = round((vals.filter((v) => v > 0).length / vals.length) * 100);
+      else if (CYCLE_DOWN.includes(key)) hitRate[h] = round((vals.filter((v) => v < 0).length / vals.length) * 100);
+      else hitRate[h] = null;
+    }
+    out.push({ posture: key, label: CYCLE_POSTURE_LABEL[key], n: list.length, avg, counts, hitRate });
+  }
+  return out.sort((a, b) => CYCLE_ORDER.indexOf(a.posture) - CYCLE_ORDER.indexOf(b.posture));
 }
 
 function retAt(r: ConvictionCall, h: Horizon): number | null {

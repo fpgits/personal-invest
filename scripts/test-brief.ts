@@ -95,8 +95,8 @@ const base: BriefInput = {
     crypto: {
       cash: 2500,
       lines: [
-        { symbol: "BTC", amount: 1500, base: 1500, multiplier: 1, ladderMultiplier: 1, confirmed: true, reason: "35% por debajo del máximo histórico: aporte normal", stats: null },
-        { symbol: "ETH", amount: 800, base: 1000, multiplier: 0.8, ladderMultiplier: 0.8, confirmed: true, reason: "a menos del 10% del máximo histórico: aportar menos y guardar reserva", stats: null },
+        { symbol: "BTC", amount: 1500, base: 1500, multiplier: 1, ladderMultiplier: 1, confirmed: true, posture: "cycle_normal", reason: "35% por debajo del máximo histórico: aporte normal", stats: null },
+        { symbol: "ETH", amount: 800, base: 1000, multiplier: 0.8, ladderMultiplier: 0.8, confirmed: true, posture: "cycle_light", reason: "a menos del 10% del máximo histórico: aportar menos y guardar reserva", stats: null },
       ],
       reserve: 200,
       extra: 0,
@@ -222,6 +222,91 @@ console.log("\n# candidato nuevo de la watchlist en el plan del mes");
   const line = withNew.month.equity.lines[0];
   truthy(line.isNew && line.why.includes("Nueva en cartera"), `marca la nueva (${line.why})`);
   truthy(withNew.week.items.some((i) => i.symbol === "CRM" && i.title.includes("watchlist")), "la oportunidad dice que viene de la watchlist");
+}
+
+console.log("\n# el ciclo de cripto entra en la semana, no solo en la linea del mes");
+{
+  const stats = (drawdownPct: number, daysSinceNewLow: number) => ({
+    price: 45000,
+    ath: 126000,
+    athDaysAgo: 400,
+    drawdownPct,
+    ma200: 60000,
+    distToMaPct: -25,
+    daysSinceNewLow,
+    makingNewLows: daysSinceNewLow < 21,
+    days: 2200,
+    shallowHistory: false,
+  });
+
+  // Tramo retenido: la caida sigue. Debe decir "espera", no "compra".
+  const holding = buildBrief({
+    ...base,
+    plan: {
+      ...base.plan,
+      crypto: {
+        cash: 2500,
+        lines: [
+          { symbol: "BTC", amount: 1500, base: 1500, multiplier: 1, ladderMultiplier: 1.5, confirmed: false, posture: "cycle_hold", reason: "64% por debajo del máximo histórico, pero sigue marcando mínimos nuevos", stats: stats(-64.3, 3) },
+        ],
+        reserve: 1000,
+        extra: 0,
+        holding: true,
+      },
+    },
+  });
+  truthy(holding.sources.includes("ciclo cripto"), `el ciclo aporta al resumen (${holding.sources.join(", ")})`);
+  const hold = holding.week.items.find((i) => i.symbol === "BTC");
+  truthy(hold?.action === "esperar", `tramo retenido dice esperar (${hold?.action})`);
+  truthy(Boolean(hold?.title.includes("No adelantes")), `titular claro: ${hold?.title}`);
+  truthy(Boolean(hold?.why.includes("1.5x")), "dice cuanto se esta guardando");
+
+  // La caida paro: ahora si suelta el tramo y eso es una senal de la semana.
+  const released = buildBrief({
+    ...base,
+    plan: {
+      ...base.plan,
+      crypto: {
+        cash: 2500,
+        lines: [
+          { symbol: "BTC", amount: 2250, base: 1500, multiplier: 1.5, ladderMultiplier: 1.5, confirmed: true, posture: "cycle_extra", reason: "64% por debajo del máximo histórico y 25 días sin mínimos nuevos", stats: stats(-64.3, 25) },
+        ],
+        reserve: 250,
+        extra: 0,
+        holding: false,
+      },
+    },
+  });
+  const rel = released.week.items.find((i) => i.symbol === "BTC");
+  truthy(rel?.action === "comprar", `tramo suelto dice comprar (${rel?.action})`);
+  truthy(Boolean(rel?.title.includes("1.5x")), `titular con el multiplicador: ${rel?.title}`);
+  truthy(rel?.amount === 2250, "lleva el importe");
+
+  // Cerca del maximo: no es urgente, va a vigilar.
+  const near = buildBrief({
+    ...base,
+    plan: {
+      ...base.plan,
+      crypto: {
+        cash: 2500,
+        lines: [
+          { symbol: "ETH", amount: 750, base: 1500, multiplier: 0.5, ladderMultiplier: 0.5, confirmed: true, posture: "cycle_light", reason: "a menos del 10% del máximo histórico", stats: stats(-4, 200) },
+        ],
+        reserve: 1750,
+        extra: 0,
+        holding: false,
+      },
+    },
+  });
+  truthy(near.watch.items.some((i) => i.symbol === "ETH" && i.action === "vigilar"), "cerca del maximo va a vigilar");
+  truthy(!near.week.items.some((i) => i.symbol === "ETH"), "y no ocupa sitio en la semana");
+
+  // El exceso sobre el efectivo del mes se avisa, nunca se asume la reserva.
+  const over = buildBrief({
+    ...base,
+    plan: { ...base.plan, crypto: { ...released.month.crypto, lines: released.month.crypto.lines.map(() => ({ symbol: "BTC", amount: 3000, base: 1500, multiplier: 2, ladderMultiplier: 2, confirmed: true, posture: "cycle_extra" as const, reason: "capitulación", stats: stats(-78, 30) })), cash: 2500, reserve: 0, extra: 500, holding: false } },
+  });
+  truthy(over.week.items.some((i) => i.title.includes("más de lo que aportas")), "avisa del exceso sobre el aporte mensual");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

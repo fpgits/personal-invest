@@ -6,10 +6,12 @@ import { ChevronDown } from "lucide-react";
 import { Badge, Card, CardTitle } from "@/components/ui";
 import type { ConvictionCall } from "@/db/schema";
 import { POSTURE_LABEL, type Posture } from "@/lib/conviction-labels";
-import type { PostureStats } from "@/lib/conviction-calls";
+// CycleStatsRow ya trae su propia etiqueta: asi el panel no importa
+// crypto-cycle (que arrastra la descarga de historicos al bundle del navegador).
+import type { CycleStatsRow, PostureStats } from "@/lib/conviction-calls";
 import { api, cn, fmtDate } from "@/lib/utils";
 
-type History = { calls: ConvictionCall[]; stats: PostureStats[]; asOf: number };
+type History = { calls: ConvictionCall[]; stats: PostureStats[]; cycleStats: CycleStatsRow[]; asOf: number };
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -21,6 +23,31 @@ const HORIZONS = [30, 90, 180, 365] as const;
 
 function label(p: PostureStats["posture"]): string {
   return p === "benchmark" ? "Indice (VOO)" : POSTURE_LABEL[p as Posture];
+}
+
+/** Etiqueta de una fila suelta, que puede ser de bolsa, indice o ciclo cripto. */
+const CYCLE_LABEL: Record<string, string> = {
+  cycle_extra: "Aporte extra",
+  cycle_normal: "Aporte normal",
+  cycle_light: "Aporte reducido",
+  cycle_hold: "Tramo retenido",
+};
+
+function callLabel(c: ConvictionCall): string {
+  if (c.kind === "benchmark") return "Indice";
+  if (c.kind === "cycle") return CYCLE_LABEL[c.posture] ?? c.posture;
+  return POSTURE_LABEL[c.posture as Posture] ?? c.posture;
+}
+
+function callTone(c: ConvictionCall): "up" | "down" | "warn" | "neutral" | "accent" {
+  if (c.kind === "benchmark") return "neutral";
+  if (c.kind === "cycle") {
+    return c.posture === "cycle_extra" ? "up" : c.posture === "cycle_hold" ? "warn" : "accent";
+  }
+  if (c.posture === "buy" || c.posture === "strong_buy") return "up";
+  if (c.posture === "hold") return "accent";
+  if (c.posture === "reduce") return "warn";
+  return "down";
 }
 
 function Ret({ v }: { v: number | null }) {
@@ -45,6 +72,7 @@ export function HistoryCard({ refreshKey = 0 }: { refreshKey?: number }) {
   const [open, setOpen] = useState(false);
 
   const stats = (data?.stats ?? []).filter((s) => s.n > 0);
+  const cycle = (data?.cycleStats ?? []).filter((s) => s.n > 0);
   const anyDue = stats.some((s) => HORIZONS.some((h) => s.counts[h] > 0));
 
   return (
@@ -112,6 +140,57 @@ export function HistoryCard({ refreshKey = 0 }: { refreshKey?: number }) {
         </>
       )}
 
+      {cycle.length > 0 && (
+        <div className="mt-5">
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+            Ciclo cripto · se mide aparte
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-faint">
+                  <th className="py-1.5 pr-3 font-medium">Decision</th>
+                  <th className="py-1.5 pr-3 font-medium tnum">N</th>
+                  {HORIZONS.map((h) => (
+                    <th key={h} className="py-1.5 pr-3 font-medium">
+                      {h}d
+                    </th>
+                  ))}
+                  <th className="py-1.5 font-medium">Acierto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cycle.map((s) => (
+                  <tr key={s.posture} className="border-t border-border">
+                    <td className="py-2 pr-3 font-medium">{s.label}</td>
+                    <td className="py-2 pr-3 tnum text-muted">{s.n}</td>
+                    {HORIZONS.map((h) => (
+                      <td key={h} className="py-2 pr-3">
+                        <Ret v={s.avg[h]} />
+                        {s.counts[h] > 0 && <span className="ml-1 text-[10px] text-faint">({s.counts[h]})</span>}
+                      </td>
+                    ))}
+                    <td className="py-2">
+                      {s.hitRate[90] !== null ? (
+                        <span className="tnum">{s.hitRate[90]}% a 90d</span>
+                      ) : s.hitRate[30] !== null ? (
+                        <span className="tnum">{s.hitRate[30]}% a 30d</span>
+                      ) : (
+                        <span className="text-faint">–</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-faint">
+            Aqui acertar es distinto: en un aporte extra, que subiera; en un tramo retenido o un aporte reducido
+            cerca del maximo, que siguiera cayendo. Es la unica forma de saber si esperar la senal vale la pena.
+          </p>
+        </div>
+      )}
+
       {data && data.calls.length > 0 && (
         <div className="mt-4">
           <button
@@ -127,9 +206,7 @@ export function HistoryCard({ refreshKey = 0 }: { refreshKey?: number }) {
                 <li key={c.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-xs">
                   <span className="w-20 text-faint">{fmtDate(c.calledAt)}</span>
                   <span className="w-14 font-semibold">{c.symbol}</span>
-                  <Badge tone={c.kind === "benchmark" ? "neutral" : c.posture === "buy" || c.posture === "strong_buy" ? "up" : c.posture === "hold" ? "accent" : c.posture === "reduce" ? "warn" : "down"}>
-                    {c.kind === "benchmark" ? "Indice" : POSTURE_LABEL[c.posture as Posture]}
-                  </Badge>
+                  <Badge tone={callTone(c)}>{callLabel(c)}</Badge>
                   {c.planAmount !== null && c.planAmount > 0 && (
                     <span className="tnum text-muted">${Math.round(c.planAmount)}</span>
                   )}

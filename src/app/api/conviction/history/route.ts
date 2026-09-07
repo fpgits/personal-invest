@@ -1,5 +1,5 @@
 import { protectedRoute } from "@/lib/api";
-import { listCalls, summarizeCalls } from "@/lib/conviction-calls";
+import { listCalls, summarizeCalls, summarizeCycleCalls } from "@/lib/conviction-calls";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,5 +11,10 @@ export const dynamic = "force-dynamic";
  */
 export const GET = protectedRoute(async () => {
   const calls = await listCalls(300);
-  return Response.json({ calls, stats: summarizeCalls(calls), asOf: Date.now() });
+  return Response.json({
+    calls,
+    stats: summarizeCalls(calls),
+    cycleStats: summarizeCycleCalls(calls),
+    asOf: Date.now(),
+  });
 });

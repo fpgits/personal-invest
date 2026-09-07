@@ -144,6 +144,61 @@ async function main() {
   eq(sBench.avg[90], 10, "benchmark retorno medio 90d");
   eq(sBuy.counts[365], 0, "365d aun sin filas vencidas");
 
+  // -------------------------------------------------------------------------
+  // Ciclo cripto: el modelo tiene que ser MEDIBLE. BTC/ETH no estan en la
+  // cartera ni en la cache de precios, asi que sin el resolutor propio no
+  // venceria ninguna de sus llamadas y la escalera seria opinion sin marcador.
+  console.log("\n# ciclo cripto: se registra y se mide aparte");
+  const { summarizeCycleCalls } = await import("../src/lib/conviction-calls");
+  const t1 = Date.parse("2026-02-01T00:00:00Z");
+  await recordBatch({
+    kind: "plan",
+    items: [],
+    cycleItems: [
+      {
+        symbol: "BTC", assetId: null, posture: "cycle_hold", multiplier: 1, ladderMultiplier: 1.5,
+        confirmed: false, price: 60000, ath: 126000, drawdownPct: -52.4, planAmount: 1500,
+        reason: "sigue marcando minimos nuevos",
+      },
+      {
+        symbol: "ETH", assetId: null, posture: "cycle_extra", multiplier: 1.5, ladderMultiplier: 1.5,
+        confirmed: true, price: 2000, ath: 4800, drawdownPct: -58.3, planAmount: 1500,
+        reason: "25 dias sin minimos nuevos",
+      },
+    ],
+    now: t1,
+  });
+  const withCycle = await listCalls();
+  const btc = withCycle.find((c) => c.symbol === "BTC")!;
+  eq(btc.kind, "cycle", "la fila de cripto va con kind cycle");
+  eq(btc.assetClass, "crypto", "clase de activo cripto");
+  eq(btc.confidence, 0, "tramo retenido: confianza 0 (la escalera no solto)");
+  eq(btc.fairValue, 126000, "guarda el maximo historico como referencia");
+  eq(btc.upsidePct, -52.4, "y la caida desde ese maximo");
+  eq(withCycle.find((c) => c.symbol === "ETH")?.score, 150, "score = multiplicador aplicado x100");
+
+  console.log("\n# la tabla de bolsa no se contamina con cripto");
+  const statsAfter = summarizeCalls(withCycle);
+  truthy(
+    !statsAfter.some((s) => String(s.posture).startsWith("cycle_")),
+    "summarizeCalls ignora las llamadas de ciclo",
+  );
+  eq(statsAfter.find((s) => s.posture === "buy")!.n, 1, "la compra de bolsa sigue contando una sola vez");
+
+  console.log("\n# retornos de cripto: precio resuelto fuera de la cache");
+  // BTC cae otro 25%, ETH sube 50%.
+  const cryptoNow = new Map([["BTC", 45000], ["ETH", 3000]]);
+  const marked2 = await markForwardReturns(t1 + 100 * DAY, async (s) => cryptoNow.get(s) ?? null);
+  truthy(marked2 >= 2, `se marcan las dos filas de cripto (${marked2})`);
+  const cyc = summarizeCycleCalls(await listCalls());
+  const held = cyc.find((s) => s.posture === "cycle_hold")!;
+  const extra = cyc.find((s) => s.posture === "cycle_extra")!;
+  eq(held.avg[90], -25, "tramo retenido: el precio siguio cayendo -25%");
+  eq(held.hitRate[90], 100, "retener acerto: acertar aqui es que cayera");
+  eq(extra.avg[90], 50, "aporte extra: +50%");
+  eq(extra.hitRate[90], 100, "el aporte extra acerto: subio");
+  eq(held.label, "Tramo retenido", "la fila trae su etiqueta lista para la UI");
+
   console.log("\n# ajustes del oraculo");
   const d = oracleFromSettings({});
   eq(d, ORACLE_DEFAULTS, "sin ajustes, valores por defecto");

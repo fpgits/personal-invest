@@ -406,6 +406,67 @@ const macroProvider: BriefProvider = {
   },
 };
 
+/**
+ * Ciclo de cripto. Antes la escalera solo aparecía como una línea del mes, así
+ * que el momento accionable de verdad —que la caída pare y se suelte el
+ * tramo— pasaba desapercibido. Aquí entra en la semana como cualquier otra
+ * señal.
+ */
+const cryptoProvider: BriefProvider = {
+  name: "ciclo cripto",
+  run: (ctx) => {
+    const week: BriefItem[] = [];
+    const watch: BriefItem[] = [];
+    for (const l of ctx.plan.crypto.lines) {
+      const dd = l.stats?.drawdownPct ?? null;
+      const depth = dd !== null ? `${pct(dd)} por debajo de su máximo` : "sin histórico suficiente";
+      if (l.posture === "cycle_extra") {
+        week.push({
+          action: "comprar",
+          symbol: l.symbol,
+          title: `Sube el aporte de ${l.symbol} a ${l.multiplier}x`,
+          why: `Está ${depth} y lleva ${l.stats?.daysSinceNewLow ?? "varios"} días sin marcar un mínimo nuevo: la caída se paró, toca soltar el tramo que venías guardando.`,
+          amount: l.amount,
+          href: "/invest/analisis",
+          source: "ciclo cripto",
+        });
+      } else if (l.posture === "cycle_hold") {
+        week.push({
+          action: "esperar",
+          symbol: l.symbol,
+          title: `No adelantes compras de ${l.symbol}`,
+          why: `Está ${depth} y sigue marcando mínimos nuevos. Aporta lo normal; la diferencia hasta ${l.ladderMultiplier}x se guarda para cuando pare de caer.`,
+          amount: l.amount,
+          href: "/invest/analisis",
+          source: "ciclo cripto",
+        });
+      } else if (l.posture === "cycle_light") {
+        watch.push({
+          action: "vigilar",
+          symbol: l.symbol,
+          title: `${l.symbol} está cerca de su máximo histórico`,
+          why: "Aportas menos de lo habitual a propósito: comprar caro consume la munición que hace falta abajo. La diferencia va a reserva.",
+          amount: l.amount,
+          href: "/invest/analisis",
+          source: "ciclo cripto",
+        });
+      }
+    }
+    if (ctx.plan.crypto.extra > 0) {
+      week.push({
+        action: "revisar",
+        symbol: null,
+        title: `El ciclo pide ${money(ctx.plan.crypto.extra, ctx.currency)} más de lo que aportas al mes`,
+        why: "Solo tiene sentido si la reserva que fuiste guardando existe de verdad. Si no la tienes, aporta lo del mes y ya.",
+        amount: ctx.plan.crypto.extra,
+        href: "/invest/analisis",
+        source: "ciclo cripto",
+      });
+    }
+    return { week, watch };
+  },
+};
+
 /** El registro. El orden importa solo para desempatar; cada bloque se reordena por acción. */
 export const PROVIDERS: BriefProvider[] = [
   verdictsProvider,
@@ -414,6 +475,7 @@ export const PROVIDERS: BriefProvider[] = [
   thesisProvider,
   earningsProvider,
   watchTargetsProvider,
+  cryptoProvider,
   macroProvider,
 ];
 
