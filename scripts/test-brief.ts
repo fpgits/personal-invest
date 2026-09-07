@@ -4,7 +4,7 @@
  * que dice lo que los numeros dicen y nada mas.
  * Correr con: npm run test:brief
  */
-import { buildBrief, type BriefInput } from "../src/lib/brief";
+import { buildBrief, buyZonePrice, dropToBuyZone, type BriefInput } from "../src/lib/brief";
 import type { ConvictionResult } from "../src/lib/conviction";
 import type { Posture } from "../src/lib/conviction-labels";
 
@@ -307,6 +307,32 @@ console.log("\n# el ciclo de cripto entra en la semana, no solo en la linea del 
     plan: { ...base.plan, crypto: { ...released.month.crypto, lines: released.month.crypto.lines.map(() => ({ symbol: "BTC", amount: 3000, base: 1500, multiplier: 2, ladderMultiplier: 2, confirmed: true, posture: "cycle_extra" as const, reason: "capitulación", stats: stats(-78, 30) })), cash: 2500, reserve: 0, extra: 500, holding: false } },
   });
   truthy(over.week.items.some((i) => i.title.includes("más de lo que aportas")), "avisa del exceso sobre el aporte mensual");
+}
+
+console.log("\n# la zona de compra es un precio concreto, no 'algo mas de descuento'");
+{
+  // El caso real: META a $616,77 con un 21% de descuento sobre un valor
+  // razonable de ~$781. La zona esta en 781 x 0,75 = $585,54, un 5,1% abajo.
+  eq(buyZonePrice(780.72), 585.54, "zona = valor razonable menos el 25%");
+  eq(dropToBuyZone(21), 5.1, "y esta un 5,1% por debajo del precio de hoy");
+  eq(dropToBuyZone(25), 0, "ya en zona: no falta caida");
+  eq(dropToBuyZone(40), -25, "por debajo de la zona: negativo (sobra descuento)");
+  eq(buyZonePrice(null), null, "sin valor razonable no hay zona");
+  eq(dropToBuyZone(null), null, "sin margen de seguridad tampoco");
+
+  const near = buildBrief({
+    ...base,
+    results: [verdict("META", "hold", 66, 21, 26.6)].map((r) => ({ ...r, fairValue: 780.72 })),
+    events: [],
+    pendingProposals: 0,
+    earnings: [],
+  });
+  const item = near.watch.items.find((i) => i.symbol === "META");
+  truthy(item !== undefined, "el aviso sigue apareciendo");
+  truthy(Boolean(item?.why.includes("$586")), `dice el precio de entrada: ${item?.why}`);
+  truthy(Boolean(item?.why.includes("$781")), "y el valor razonable del que sale");
+  truthy(Boolean(item?.why.includes("5,1%")), "y cuanto falta desde hoy, con coma decimal");
+  truthy(Boolean(item?.why.includes("convicción aguanta")), "y avisa de que el precio no es la unica condicion");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

@@ -147,6 +147,34 @@ export type BriefContext = BriefInput & {
   bySymbol: Map<string, ConvictionResult>;
 };
 
+/**
+ * Margen de seguridad que define la "zona de compra": el descuento sobre el
+ * valor razonable a partir del cual una idea entra en el plan del mes.
+ * Es el mismo umbral que usa el proveedor de veredicto, expuesto aqui para
+ * poder decir el PRECIO en el que ocurre en vez de solo "se acerca".
+ */
+export const BUY_ZONE_MOS = 25;
+/** A partir de aqui ya se vigila, aunque todavia no entre. */
+export const NEAR_ZONE_MOS = 10;
+
+/** Precio al que un activo alcanzaria la zona de compra. Puro. */
+export function buyZonePrice(fairValue: number | null, mosPct = BUY_ZONE_MOS): number | null {
+  if (fairValue === null || !Number.isFinite(fairValue) || fairValue <= 0) return null;
+  return Math.round(fairValue * (1 - mosPct / 100) * 100) / 100;
+}
+
+/**
+ * Cuanto tendria que caer el precio de hoy, en %, para tocar la zona de
+ * compra. Sale del propio margen de seguridad sin necesidad del precio:
+ * precio = valor x (1 - mos/100) y zona = valor x (1 - objetivo/100), asi que
+ * el valor razonable se cancela. Puro.
+ */
+export function dropToBuyZone(mosPct: number | null, targetMos = BUY_ZONE_MOS): number | null {
+  if (mosPct === null || !Number.isFinite(mosPct) || mosPct >= 100) return null;
+  const drop = (1 - (1 - targetMos / 100) / (1 - mosPct / 100)) * 100;
+  return Math.round(drop * 10) / 10;
+}
+
 export type BriefProvider = {
   name: string;
   run: (ctx: BriefContext) => { week: BriefItem[]; watch: BriefItem[] };
@@ -190,23 +218,32 @@ const verdictsProvider: BriefProvider = {
           href: "/invest/analisis",
           source: "veredicto",
         });
-      } else if ((r.posture === "buy" || r.posture === "strong_buy") && mos !== null && mos >= 25) {
+      } else if ((r.posture === "buy" || r.posture === "strong_buy") && mos !== null && mos >= BUY_ZONE_MOS) {
         const isNew = !ctx.held.has(r.symbol.toUpperCase());
         week.push({
           action: "comprar",
           symbol: r.symbol,
           title: isNew ? `${r.symbol} (de tu watchlist) está en zona de compra` : `${r.symbol} está en zona de compra`,
-          why: `Cotiza un ${pct(mos)} por debajo de lo que vale. ${whyBuy(r)}${inPlan ? ` El plan del mes le asigna ${money(inPlan, ctx.currency)}.` : ""}`,
+          why: `Cotiza un ${pct(mos)} por debajo de lo que vale (${money(r.fairValue ?? 0, ctx.currency)}). ${whyBuy(r)}${inPlan ? ` El plan del mes le asigna ${money(inPlan, ctx.currency)}.` : ""}`,
           amount: inPlan,
           href: "/invest/analisis",
           source: "veredicto",
         });
-      } else if (r.posture === "hold" && mos !== null && mos >= 10 && mos < 25) {
+      } else if (r.posture === "hold" && mos !== null && mos >= NEAR_ZONE_MOS && mos < BUY_ZONE_MOS) {
+        // Decir el precio, no solo "se acerca": la zona de compra es un numero
+        // concreto (el valor razonable menos el margen de seguridad exigido) y
+        // el aviso no sirve de nada si hay que ir a calcularlo a mano.
+        const zone = buyZonePrice(r.fairValue);
+        const away = dropToBuyZone(mos);
+        const where =
+          zone !== null
+            ? `Entra en el plan a ${money(zone, ctx.currency)} o menos${away !== null && away > 0 ? ` (un ${String(away).replace(".", ",")}% por debajo de hoy)` : ""}`
+            : "Le falta descuento para entrar en el plan";
         watch.push({
           action: "vigilar",
           symbol: r.symbol,
           title: `${r.symbol} se acerca a zona de compra`,
-          why: `Cotiza un ${pct(mos)} por debajo de lo que vale; con algo más de descuento entra en el plan.`,
+          why: `Cotiza un ${pct(mos)} por debajo de lo que vale (${money(r.fairValue ?? 0, ctx.currency)}). ${where}, si la convicción aguanta.`,
           amount: null,
           href: "/invest/analisis",
           source: "veredicto",
