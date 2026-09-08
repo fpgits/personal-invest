@@ -112,11 +112,13 @@ function Chat() {
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let got = 0;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
+        got += chunk.length;
         // Acumulamos dentro del updater en vez de en una variable externa:
         // sin estado compartido mutable y sin depender del orden de renders.
         setMessages((m) => {
@@ -128,6 +130,13 @@ function Chat() {
           };
           return copy;
         });
+      }
+
+      // Un error del modelo viaja DENTRO del stream, asi que la respuesta sale
+      // 200 y vacia. Sin esto, el fallo se ve como una burbuja en blanco para
+      // siempre: parece que se colgo cuando en realidad ya termino.
+      if (got === 0) {
+        throw new Error("El modelo no devolvio nada. Mira el registro de uso en Ajustes para ver el motivo.");
       }
     } catch (e) {
       setError((e as Error).message);

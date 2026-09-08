@@ -347,11 +347,37 @@ export async function aiText(purpose: AiPurpose, args: AiTextArgs): Promise<AiTe
 }
 
 export type AiStreamArgs = {
+  /** Instrucciones del sistema. Van APARTE de los mensajes (ver splitSystem). */
+  system?: string;
   messages: ModelMessage[];
   temperature?: number;
   /** Con el texto completo, cuando el modelo termina (aunque el cliente se haya ido). */
   onFinish?: (text: string, usage: CallUsage) => Promise<void> | void;
 };
+
+/**
+ * El AI SDK v7 RECHAZA un mensaje con role "system" dentro de `messages`:
+ * "System messages are not allowed in the prompt or messages fields. Use the
+ * instructions option instead." Falla antes de gastar un token, y como el
+ * error viaja dentro del stream la respuesta sale 200 y vacia: el chat
+ * parecia colgado en vez de roto, que es la peor forma de fallar.
+ *
+ * Por eso se separan aqui, en el borde, en vez de confiar en que cada llamante
+ * se acuerde. Puro y testeable.
+ */
+export function splitSystem(
+  messages: ModelMessage[],
+  system?: string,
+): { system: string | undefined; rest: ModelMessage[] } {
+  const inline = messages.filter((m) => m.role === "system");
+  const rest = messages.filter((m) => m.role !== "system");
+  if (inline.length === 0) return { system, rest };
+  const texts = inline
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .filter((t) => t !== "");
+  const merged = [system, ...texts].filter((t): t is string => Boolean(t)).join("\n\n");
+  return { system: merged === "" ? undefined : merged, rest };
+}
 
 /** Chat en streaming. El registro se hace al terminar el stream. */
 export async function aiStream(purpose: AiPurpose, args: AiStreamArgs) {
@@ -359,9 +385,11 @@ export async function aiStream(purpose: AiPurpose, args: AiStreamArgs) {
   const { model, modelId, prices } = await modelFor(purpose);
   const policy = AI_POLICY[purpose];
   let recorded = false;
+  const { system, rest } = splitSystem(args.messages, args.system);
   const result = streamText({
     model,
-    messages: args.messages,
+    system,
+    messages: rest,
     temperature: args.temperature,
     maxOutputTokens: policy.maxOutputTokens,
     maxRetries: 1,

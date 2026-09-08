@@ -5,6 +5,7 @@
  * Correr con: npm run test:ai
  */
 import { z } from "zod";
+import { splitSystem } from "../src/lib/ai/client";
 import { AiBudgetError, classifyError, isBudgetError } from "../src/lib/ai/errors";
 import { BASE_RULES, CHAT_SYSTEM, NO_ADVICE, RISK_SYSTEM } from "../src/lib/ai/prompts";
 import {
@@ -265,6 +266,36 @@ console.log("\n# el prompt del chat habla del motor en vez de esquivar la pregun
   truthy(CHAT_SYSTEM.includes("Nunca improvises un importe"), "y que no puede inventarse una cifra distinta");
   truthy(CHAT_SYSTEM.includes("La app no opera"), "y que no ejecuta ordenes");
   truthy(BASE_RULES.includes("Nunca inventes cifras"), "no inventar cifras sigue siendo regla de todos");
+}
+
+console.log("\n# el mensaje de sistema va aparte, no dentro de messages");
+{
+  // REGRESION: el AI SDK v7 rechaza un role "system" dentro de messages
+  // ("Use the instructions option instead"). Fallaba antes de gastar un token
+  // y el error viajaba dentro del stream, asi que la respuesta salia 200 y
+  // vacia: el chat parecia colgado. Tres llamadas reales murieron asi.
+  const user = { role: "user" as const, content: "hola" };
+  const sys = { role: "system" as const, content: "eres X" };
+
+  const a = splitSystem([sys, user]);
+  eq(a.system, "eres X", "saca el system de los mensajes");
+  eq(a.rest.length, 1, "y lo quita de la lista");
+  truthy(a.rest.every((m) => m.role !== "system"), "no queda ningun role system");
+
+  const b = splitSystem([user], "instrucciones");
+  eq(b.system, "instrucciones", "respeta el system explicito");
+  eq(b.rest.length, 1, "sin tocar los mensajes");
+
+  const c = splitSystem([sys, user], "instrucciones");
+  eq(c.system, "instrucciones\n\neres X", "si vienen los dos, se juntan sin perder nada");
+
+  const d = splitSystem([user]);
+  eq(d.system, undefined, "sin system, undefined (no una cadena vacia)");
+  eq(d.rest.length, 1, "y los mensajes intactos");
+
+  const e = splitSystem([sys, user, { role: "assistant" as const, content: "ok" }, sys]);
+  eq(e.system, "eres X\n\neres X", "varios systems se concatenan en orden");
+  eq(e.rest.map((m) => m.role), ["user", "assistant"], "el resto conserva su orden");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

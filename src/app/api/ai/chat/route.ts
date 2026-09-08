@@ -61,18 +61,13 @@ export async function POST(req: Request) {
       })),
     );
 
-    const messages: ModelMessage[] = [
-      {
-        role: "system",
-        content: `${CHAT_SYSTEM}\n\n# Contexto actual\n\n${context}`,
-        // El contexto es identico entre mensajes del mismo rato: los
-        // proveedores con cache de prompt (Anthropic explicita; Gemini,
-        // OpenAI y DeepSeek automatica) lo cobran a fraccion de precio.
-        providerOptions: { openrouter: { cacheControl: { type: "ephemeral" } } },
-      },
-      ...history,
-      { role: "user", content: message },
-    ];
+    // Las instrucciones van en `system`, NO como un mensaje: el AI SDK v7
+    // rechaza un role "system" dentro de messages y el fallo sale como una
+    // respuesta vacia (200 sin texto), que parece que el chat se cuelga.
+    // El contexto es identico entre mensajes del mismo rato, asi que los
+    // proveedores con cache de prompt lo cobran a fraccion de precio.
+    const system = `${CHAT_SYSTEM}\n\n# Contexto actual\n\n${context}`;
+    const messages: ModelMessage[] = [...history, { role: "user", content: message }];
 
     await db.insert(aiMessages).values({
       id: id(),
@@ -83,6 +78,7 @@ export async function POST(req: Request) {
     });
 
     const { result, modelId } = await aiStream("chat", {
+      system,
       messages,
       temperature: 0.4,
       onFinish: async (text) => {
