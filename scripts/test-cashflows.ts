@@ -5,6 +5,9 @@
  * Correr con: npm run test:ai  →  incluido en npm test como test:cashflows
  */
 import {
+  cashFreshness,
+  cashTypeBreakdown,
+  CASH_REPORT_LAG_DAYS,
   exchangeCashFlows,
   flexCashFlows,
   isCashTransfer,
@@ -148,6 +151,60 @@ console.log("\n# Retorno sobre lo aportado");
 
   const withdrawnAll = returnOnContributions(500, -100);
   eq(withdrawnAll.gainPct, null, "neto negativo tampoco da %");
+}
+
+console.log("\n# frescura: un aporte reciente que no aparece no es un fallo de la app");
+{
+  const DAY = 86400_000;
+  const NOW = Date.parse("2026-09-08T15:00:00Z");
+  const flow = (iso: string) => ({ occurredAt: Date.parse(iso) });
+
+  // El caso real: ultimo movimiento el 21 de agosto, mirando el 8 de
+  // septiembre. Las operaciones llegaban al dia; el efectivo no.
+  const stale = cashFreshness([flow("2026-08-21T00:00:00Z"), flow("2026-07-02T00:00:00Z")], NOW);
+  eq(stale.daysSince, 18, "cuenta los dias desde el ultimo movimiento");
+  eq(stale.lastAt, Date.parse("2026-08-21T00:00:00Z"), "y se queda con el mas reciente, no con el ultimo de la lista");
+  truthy(stale.couldBePending, "18 dias: un aporte reciente podria estar aun sin reportar");
+
+  const fresh = cashFreshness([flow("2026-09-07T00:00:00Z")], NOW);
+  eq(fresh.daysSince, 1, "ayer");
+  truthy(!fresh.couldBePending, "con un movimiento de ayer no se avisa de nada");
+
+  const borde = cashFreshness([{ occurredAt: NOW - CASH_REPORT_LAG_DAYS * DAY }], NOW);
+  truthy(borde.couldBePending, "justo en el umbral ya avisa");
+
+  const vacio = cashFreshness([], NOW);
+  eq(vacio.lastAt, null, "sin movimientos no hay fecha");
+  truthy(vacio.couldBePending, "y se avisa igual: puede que aun no haya llegado el primero");
+}
+
+console.log("\n# el filtro de tipos deja rastro de lo que descarta");
+{
+  const c = (type: string, amount: number): FlexCash => ({
+    transactionId: type + amount,
+    symbol: null,
+    type,
+    amount,
+    currency: "USD",
+    executedAt: 0,
+    description: "",
+  });
+
+  const b = cashTypeBreakdown([
+    c("Deposits/Withdrawals", 4500),
+    c("Dividends", 3.06),
+    c("Withholding Tax", -0.45),
+    c("Deposits/Withdrawals", -0.59),
+    c("Broker Interest Received", 1.2),
+  ]);
+  eq(b.kept, ["Deposits/Withdrawals"], "guarda los traspasos");
+  eq(b.dropped, ["Broker Interest Received", "Dividends", "Withholding Tax"], "y nombra lo que dejo fuera, ordenado y sin repetir");
+
+  // Lo que de verdad importa: si el broker cambia la etiqueta, se ve.
+  const raro = cashTypeBreakdown([c("Electronic Fund Transfer", 5000)]);
+  eq(raro.kept, [], "una etiqueta nueva no se guarda...");
+  eq(raro.dropped, ["Electronic Fund Transfer"], "...pero queda registrada para poder verlo");
+  eq(cashTypeBreakdown([c("", 10)]).dropped, ["(sin tipo)"], "sin tipo tambien se reporta");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

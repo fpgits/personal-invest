@@ -22,6 +22,7 @@ import {
 } from "@/lib/group";
 import { readGroup } from "@/lib/group-server";
 import {
+  cashFreshness,
   listCashFlows,
   returnOnContributions,
   summarizeContributions,
@@ -203,9 +204,9 @@ function CashFlowCard({
   const bolsa = summarizeContributions(flowsAll.filter((f) => accountGroup(f.accountType) === "bolsa"));
   const cripto = summarizeContributions(flowsAll.filter((f) => accountGroup(f.accountType) === "cripto"));
   const ret = returnOnContributions(currentValue, sel.net);
-  const flowsInPeriod = flowsAll.filter(
-    (f) => accountInGroup(group, f.accountType) && f.occurredAt >= fromMs && f.occurredAt <= toMs,
-  );
+  const inGroup = flowsAll.filter((f) => accountInGroup(group, f.accountType));
+  const fresh = cashFreshness(inGroup);
+  const flowsInPeriod = inGroup.filter((f) => f.occurredAt >= fromMs && f.occurredAt <= toMs);
 
   return (
     <Card className="mt-4" padded={false}>
@@ -252,14 +253,33 @@ function CashFlowCard({
         )}
       </div>
 
-      <div className="border-t border-border px-5 py-2.5 text-xs text-faint">
-        Movimientos · {periodLabel} ({flowsInPeriod.length})
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-border px-5 py-2.5 text-xs text-faint">
+        <span>
+          Movimientos · {periodLabel} ({flowsInPeriod.length})
+        </span>
+        {fresh.lastAt !== null && (
+          <span>
+            Último importado: {fmtDate(fresh.lastAt)}
+            {fresh.daysSince !== null && fresh.daysSince > 0 && ` · hace ${fresh.daysSince} días`}
+          </span>
+        )}
       </div>
       {flowsInPeriod.length === 0 ? (
-        <p className="px-5 pb-5 pt-1 text-sm text-faint">
-          Sin aportes ni retiros con fecha en este periodo. El neto de arriba es
-          histórico.
-        </p>
+        <div className="px-5 pb-5 pt-1">
+          <p className="text-sm text-faint">
+            Sin aportes ni retiros con fecha en este periodo. El neto de arriba es histórico.
+          </p>
+          {/* La pregunta que esto contesta: "hice un aporte y no aparece".
+              Las operaciones llegan el mismo dia; las transferencias de
+              efectivo no, y sin avisarlo parece un fallo de la app. */}
+          {fresh.couldBePending && (
+            <p className="mt-1.5 text-xs text-muted">
+              ¿Hiciste un aporte hace poco y no lo ves? Las operaciones llegan el mismo día, pero
+              las transferencias de efectivo tardan unos días en aparecer en el informe del bróker.
+              Entran solas en cuanto las reporte.
+            </p>
+          )}
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] text-sm">

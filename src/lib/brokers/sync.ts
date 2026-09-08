@@ -2,7 +2,7 @@ import { and, eq, like, notLike } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, transactions, type Account } from "@/db/schema";
 import { makeAssetResolver } from "@/lib/assets";
-import { flexCashFlows, upsertCashFlows } from "@/lib/cashflows";
+import { cashTypeBreakdown, flexCashFlows, upsertCashFlows } from "@/lib/cashflows";
 import { decrypt } from "@/lib/crypto";
 import { buildReconciliation, type HeldTx } from "@/lib/holdings";
 import { SYNC_BUSY_ERROR, startSyncRun } from "@/lib/sync-run";
@@ -136,9 +136,18 @@ export async function syncBroker(account: Account): Promise<BrokerSyncResult> {
     // Deposits/Withdrawals de la misma seccion Cash Transactions. Van a la
     // tabla cash_flows (historial de capital), no a transactions: no son
     // operaciones y no deben tocar el P&L. Idempotente por externalId.
-    const importedCashFlows = await upsertCashFlows(
-      flexCashFlows(statement.cash, account.id),
-    ).catch(() => 0);
+    const candidates = flexCashFlows(statement.cash, account.id);
+    const importedCashFlows = await upsertCashFlows(candidates).catch(() => 0);
+    // El filtro es una lista blanca sobre texto libre del broker: si un dia
+    // etiquetan un traspaso de otra forma se caeria sin ruido y el capital
+    // aportado saldria mal. Que quede en el log lo que se vio, el periodo del
+    // informe y lo que se descarto.
+    const types = cashTypeBreakdown(statement.cash);
+    console.info(
+      `[sync] ${account.name}: efectivo ${statement.cash.length} filas, ${candidates.length} traspasos, ${importedCashFlows} nuevos` +
+        ` · periodo ${statement.fromDate ?? "?"}..${statement.toDate ?? "?"}` +
+        (types.dropped.length > 0 ? ` · descartados: ${types.dropped.join(", ")}` : ""),
+    );
 
     /* ---------- Reconciliacion contra Open Positions ---------- */
     // Se recalcula desde cero cada sync: borra ajustes anteriores.

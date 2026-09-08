@@ -44,6 +44,24 @@ export function isCashTransfer(c: FlexCash): boolean {
   return /deposit|withdrawal/i.test(c.type) && c.amount !== 0;
 }
 
+/**
+ * Que tipos de movimiento trajo el informe y cuales quedaron fuera. El filtro
+ * de arriba es una lista blanca sobre un texto libre de IBKR: si algun dia
+ * etiquetan un traspaso de otra forma, se descartaria EN SILENCIO y el capital
+ * aportado saldria mal sin que nada avisara. Esto lo deja en el log de la
+ * sincronizacion, que es donde se puede mirar. Puro.
+ */
+export function cashTypeBreakdown(cash: FlexCash[]): { kept: string[]; dropped: string[] } {
+  const kept = new Set<string>();
+  const dropped = new Set<string>();
+  for (const c of cash) {
+    const label = c.type || "(sin tipo)";
+    if (isCashTransfer(c)) kept.add(label);
+    else dropped.add(label);
+  }
+  return { kept: [...kept].sort(), dropped: [...dropped].sort() };
+}
+
 export function flexCashFlows(cash: FlexCash[], accountId: string): CashFlowInput[] {
   const out: CashFlowInput[] = [];
   for (const c of cash) {
@@ -150,6 +168,33 @@ export function returnOnContributions(
 ): { gain: number; gainPct: number | null } {
   const gain = currentValue - net;
   return { gain, gainPct: net > 0 ? (gain / net) * 100 : null };
+}
+
+/** Dias que IBKR puede tardar en reflejar una transferencia en el Flex. */
+export const CASH_REPORT_LAG_DAYS = 5;
+
+export type CashFreshness = {
+  /** Fecha del ultimo movimiento importado, o null si no hay ninguno. */
+  lastAt: number | null;
+  daysSince: number | null;
+  /**
+   * true cuando un aporte hecho hace poco todavia podria no haber llegado.
+   * Las operaciones aparecen en el Flex el mismo dia, pero las transferencias
+   * de efectivo tardan en asentarse: sin decirlo, un aporte reciente que no
+   * sale parece un fallo de la app cuando es el broker el que aun no lo tiene.
+   */
+  couldBePending: boolean;
+};
+
+/** Frescura del historial de efectivo. Puro. */
+export function cashFreshness(
+  rows: Array<{ occurredAt: number }>,
+  now: number = Date.now(),
+): CashFreshness {
+  if (rows.length === 0) return { lastAt: null, daysSince: null, couldBePending: true };
+  const lastAt = rows.reduce((max, r) => (r.occurredAt > max ? r.occurredAt : max), 0);
+  const daysSince = Math.max(0, Math.floor((now - lastAt) / 86400_000));
+  return { lastAt, daysSince, couldBePending: daysSince >= CASH_REPORT_LAG_DAYS };
 }
 
 // ---------------------------------------------------------------------------
