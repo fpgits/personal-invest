@@ -4,7 +4,7 @@
  * cuadre exacto, reserva cuando nada convence; y multiplicadores de ciclo.
  * Correr con: npm run test:allocation
  */
-import { allocate, attractiveness, targetWeights } from "../src/lib/allocation";
+import { allocate, attractiveness, targetWeights, trimFraction } from "../src/lib/allocation";
 import { cryptoPlan, cycleMultiplier, cycleStats, daysSinceNewLow, ladderFor, parseCore } from "../src/lib/crypto-cycle";
 import type { ConvictionResult } from "../src/lib/conviction";
 import type { Posture } from "../src/lib/conviction-labels";
@@ -253,6 +253,78 @@ console.log("\n# cripto: parseCore y cryptoPlan");
 
   const tranquilo = cryptoPlan(2500, core, new Map([["BTC", null], ["ETH", null]]));
   truthy(tranquilo.lines.every((l) => l.multiplier === 1) && !tranquilo.holding, "sin datos: aporte normal");
+}
+
+console.log("\n# los recortes llevan importe, acciones y lo que queda");
+{
+  const over = (symbol: string, upside: number) => ({ ...verdict(symbol, "reduce", 55), upsidePct: upside });
+  const plan = allocate({
+    cash: 0,
+    holdings: [
+      { symbol: "AMZN", value: 10_000, price: 250 },
+      { symbol: "STX", value: 8000, price: 100 },
+      { symbol: "TSLA", value: 6000, price: 300 },
+      { symbol: "TINY", value: 400, price: 20 },
+      { symbol: "OK", value: 5000, price: 50 },
+    ],
+    verdicts: [
+      over("AMZN", -30),
+      over("STX", -80),
+      { ...verdict("TSLA", "sell", 20), upsidePct: -94 },
+      over("TINY", -50),
+      verdict("OK", "hold", 65),
+    ],
+    settings: { maxWeightPct: 50, minTicket: 500, buyThreshold: 64, reserveSymbol: "SGOV" },
+  });
+
+  const amzn = plan.trims.find((t) => t.symbol === "AMZN")!;
+  const stx = plan.trims.find((t) => t.symbol === "STX")!;
+  const tsla = plan.trims.find((t) => t.symbol === "TSLA")!;
+
+  // Escalado por lo cara que esta: -30% recorta poco, -80% recorta mucho.
+  truthy(amzn.pctOfPosition < stx.pctOfPosition, `mas caro = mas recorte (AMZN ${amzn.pctOfPosition}% < STX ${stx.pctOfPosition}%)`);
+  inRange(amzn.pctOfPosition, 20, 30, "un 30% por encima del valor recorta poco");
+  eq(stx.pctOfPosition, 60, "un 80% por encima topa en el maximo del 60%");
+  eq(tsla.pctOfPosition, 100, "postura de venta sale entera");
+  eq(tsla.valueAfter, 0, "y deja la posicion a cero");
+
+  // Acciones y cuadre.
+  eq(amzn.shares, Math.floor(amzn.amount / 250), "acciones = importe / precio, hacia abajo");
+  truthy(plan.trims.every((t) => t.valueBefore - t.amount === t.valueAfter), "lo que queda cuadra con lo vendido");
+  truthy(plan.trims.every((t) => t.amount % 10 === 0), "importes redondeados a la decena");
+  eq(plan.trimTotal, plan.trims.reduce((s, t) => s + t.amount, 0), "el total es la suma");
+
+  // Migajas: por debajo del ticket minimo no se recorta, se dice y ya.
+  truthy(!plan.trims.some((t) => t.symbol === "TINY"), "una posicion diminuta no genera una venta de migajas");
+  truthy(plan.skipped.some((s) => s.symbol === "TINY" && s.reason.includes("ticket minimo")), "y se explica por que");
+  truthy(!plan.trims.some((t) => t.symbol === "OK"), "lo que no hay que recortar no aparece");
+}
+
+console.log("\n# el tope por posicion manda si pide vender mas que el precio");
+{
+  const plan = allocate({
+    cash: 0,
+    // El 60% de la cartera en una sola posicion, solo un poco cara.
+    holdings: [{ symbol: "BIG", value: 60_000, price: 100 }, { symbol: "REST", value: 40_000, price: 10 }],
+    verdicts: [{ ...verdict("BIG", "reduce", 55), upsidePct: -26 }],
+    settings: { maxWeightPct: 15, minTicket: 500, buyThreshold: 64, reserveSymbol: "SGOV" },
+  });
+  const big = plan.trims.find((t) => t.symbol === "BIG")!;
+  // Por precio tocaria ~20%; el tope del 15% de 100.000 exige bajar a 15.000.
+  eq(big.amount, 45_000, "recorta hasta el tope por posicion, no solo el 20% que pide el precio");
+  inRange(big.weightAfter, 26, 28, "tras vender, el peso baja (el total tambien baja)");
+}
+
+console.log("\n# trimFraction, aislada");
+{
+  eq(trimFraction("sell", -50), 100, "vender es vender entero");
+  eq(trimFraction("avoid", null), 100, "evitar tambien");
+  eq(trimFraction("reduce", -25), 20, "justo en el umbral: el minimo");
+  eq(trimFraction("reduce", -10), 20, "menos caro que el umbral: tampoco baja del minimo");
+  eq(trimFraction("reduce", -70), 60, "muy caro: el maximo");
+  eq(trimFraction("reduce", -300), 60, "absurdamente caro no pasa del maximo");
+  eq(trimFraction("reduce", null), 20, "sin dato de potencial, el minimo");
+  truthy(trimFraction("reduce", -50) > trimFraction("reduce", -35), "y es monotona por el medio");
 }
 
 console.log(`\n${failures === 0 ? "OK" : "FALLOS"}: ${checks - failures}/${checks} comprobaciones`);

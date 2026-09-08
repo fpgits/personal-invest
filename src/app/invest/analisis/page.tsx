@@ -98,7 +98,8 @@ function Chat() {
       const res = await fetch(api("/api/ai/chat"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, threadId }),
+        // Sin hilo todavia se omite la clave en vez de mandar null.
+        body: JSON.stringify(threadId ? { message: text, threadId } : { message: text }),
       });
 
       if (!res.ok || !res.body) {

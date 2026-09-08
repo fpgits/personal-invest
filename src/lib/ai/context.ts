@@ -1,6 +1,8 @@
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import { news, theses } from "@/db/schema";
+import { POSTURE_LABEL } from "@/lib/conviction-labels";
+import { cachedMonthlyPlan, type MonthlyPlan } from "@/lib/conviction-run";
 import { getMacro, macroToText } from "@/lib/macro";
 import { computePortfolio, type PortfolioSummary } from "@/lib/portfolio";
 import { fmtMoney, fmtPct, fmtQty } from "@/lib/utils";
@@ -80,6 +82,85 @@ export async function buildPortfolioContext(): Promise<string> {
 }
 
 /**
+ * El oraculo en texto: veredicto por activo y plan del mes. Sin esto el chat
+ * respondia "cuanto compro de NVDA" con la cartera y las noticias, es decir
+ * improvisando, mientras la app ya tenia el numero calculado. Ahora contesta
+ * con las cifras del motor determinista, que es lo unico que puede defender.
+ */
+export function oracleToText(plan: MonthlyPlan, currency: string): string {
+  const lines: string[] = [];
+  const { run, equity, crypto, settings } = plan;
+
+  const rated = run.results.filter((r) => r.posture !== "no_coverage");
+  if (rated.length > 0) {
+    lines.push(
+      "Veredicto por activo (simbolo | en cartera | postura | puntuacion/100 | valor razonable | margen de seguridad | potencial):",
+    );
+    for (const r of [...rated].sort((a, b) => b.score - a.score)) {
+      lines.push(
+        [
+          r.symbol,
+          r.held ? "si" : "candidata (watchlist)",
+          POSTURE_LABEL[r.posture],
+          String(Math.round(r.score)),
+          r.fairValue !== null ? fmtMoney(r.fairValue, currency) : "n/d",
+          r.marginOfSafetyPct !== null ? `${r.marginOfSafetyPct}%` : "n/d",
+          r.upsidePct !== null ? `${r.upsidePct}%` : "n/d",
+        ].join(" | "),
+      );
+    }
+  }
+
+  lines.push("");
+  lines.push(
+    `Plan del mes en bolsa (efectivo ${fmtMoney(equity.cash, currency)}, tope por posicion ${settings.maxWeightPct}%, ticket minimo ${fmtMoney(settings.minTicket, currency)}):`,
+  );
+  if (equity.lines.length === 0) {
+    lines.push("- Sin compras: nada supera el umbral de convicción a precio razonable.");
+  } else {
+    for (const l of equity.lines) {
+      lines.push(`- ${l.symbol}: ${fmtMoney(l.amount, currency)} (${l.reason})`);
+    }
+  }
+  if (equity.reserve > 0) {
+    lines.push(
+      `- Reserva: ${fmtMoney(equity.reserve, currency)}${equity.reserveSymbol ? ` en ${equity.reserveSymbol}` : " en efectivo"}`,
+    );
+  }
+  if (equity.trims.length > 0) {
+    lines.push("");
+    lines.push(
+      `Ventas y recortes propuestos (${fmtMoney(equity.trimTotal, currency)} en total) — simbolo | vender | acciones | % de la posicion | queda | motivo:`,
+    );
+    for (const t of equity.trims) {
+      lines.push(
+        [
+          t.symbol,
+          fmtMoney(t.amount, currency),
+          t.shares !== null ? `${t.shares} acc.` : "n/d",
+          `${t.pctOfPosition}%`,
+          `${fmtMoney(t.valueAfter, currency)} (${t.weightBefore}% -> ${t.weightAfter}% de la cartera)`,
+          t.reason,
+        ].join(" | "),
+      );
+    }
+  }
+
+  lines.push("");
+  lines.push(`Plan del mes en cripto (efectivo ${fmtMoney(crypto.cash, currency)}, modelo de ciclo, no fundamental):`);
+  for (const l of crypto.lines) {
+    lines.push(`- ${l.symbol}: ${fmtMoney(l.amount, currency)} (${l.multiplier}x) — ${l.reason}`);
+  }
+  if (crypto.reserve > 0) lines.push(`- Reserva en stablecoin: ${fmtMoney(crypto.reserve, currency)}`);
+
+  lines.push("");
+  lines.push(
+    "IMPORTANTE: estos importes son los que ya calculo el motor determinista de la app. Si te preguntan cuanto comprar de algo, usa ESTA cifra y explica de donde sale; no inventes una distinta.",
+  );
+  return lines.join("\n");
+}
+
+/**
  * El contexto del chat (cartera, tesis, noticias) se reconstruye como mucho
  * cada `CHAT_LIMITS.contextTtlMs` por instancia: entre dos mensajes seguidos
  * no cambia nada que importe y ahorra las consultas y el refresco de precios.
@@ -95,16 +176,21 @@ export async function cachedFullContext(ttlMs = CHAT_LIMITS.contextTtlMs): Promi
   return text;
 }
 
-/** Contexto extra: tesis guardadas y noticias recientes. */
+/** Contexto extra: veredicto y plan del oraculo, tesis y noticias recientes. */
 export async function buildFullContext(): Promise<string> {
-  const [p, thesisRows, newsRows, macro] = await Promise.all([
+  const [p, plan, thesisRows, newsRows, macro] = await Promise.all([
     computePortfolio(),
+    // Si el oraculo falla (una API caida), el chat sigue con lo demas: es
+    // mejor responder con la cartera que devolver un error.
+    cachedMonthlyPlan().catch(() => null),
     db.select().from(theses).limit(30),
     db.select().from(news).orderBy(desc(news.publishedAt)).limit(20),
     getMacro().catch(() => null),
   ]);
 
   const parts = ["## Estado de la cartera", portfolioToText(p)];
+
+  if (plan) parts.push(`## Veredicto y plan del oraculo\n${oracleToText(plan, p.currency)}`);
 
   const macroLine = macro ? macroToText(macro) : "";
   if (macroLine) parts.push(`## Macro\n${macroLine}`);

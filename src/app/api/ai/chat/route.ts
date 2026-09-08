@@ -17,7 +17,11 @@ export const maxDuration = 120;
 
 const schema = z.object({
   message: z.string().min(1).max(8000),
-  threadId: z.string().optional(),
+  // `nullish`, no `optional`: el cliente abre el hilo con threadId = null y
+  // JSON.stringify manda `null`, no omite la clave. Con `.optional()` zod lo
+  // rechazaba, asi que el PRIMER mensaje de cada hilo moria en un 400 y el
+  // chat no llegaba a funcionar nunca.
+  threadId: z.string().min(1).nullish(),
 });
 
 export async function POST(req: Request) {

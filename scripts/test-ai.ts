@@ -4,7 +4,9 @@
  * del historial del chat y agregados del panel de uso.
  * Correr con: npm run test:ai
  */
+import { z } from "zod";
 import { AiBudgetError, classifyError, isBudgetError } from "../src/lib/ai/errors";
+import { BASE_RULES, CHAT_SYSTEM, NO_ADVICE, RISK_SYSTEM } from "../src/lib/ai/prompts";
 import {
   AI_POLICY,
   AI_PURPOSES,
@@ -234,6 +236,35 @@ console.log("\n# Agregados del panel");
   eq(r2.lastErrors.length, 5, "como mucho 5 fallos");
   eq(r2.lastErrors[0].error, "e0", "el mas reciente primero");
   eq(summarizeCalls([], now).byPurpose, [], "sin filas, sin tipos");
+}
+
+console.log("\n# cuerpo del chat: el cliente manda null, no omite la clave");
+{
+  // REGRESION: con `threadId: z.string().optional()` zod rechazaba el null que
+  // manda JSON.stringify cuando aun no hay hilo, asi que el PRIMER mensaje de
+  // cada conversacion moria en un 400 "Datos invalidos" y el chat no llegaba a
+  // funcionar nunca. Tiene que aceptar las tres formas.
+  const schema = z.object({
+    message: z.string().min(1).max(8000),
+    threadId: z.string().min(1).nullish(),
+  });
+  truthy(schema.safeParse({ message: "hola", threadId: null }).success, "acepta threadId null (hilo nuevo)");
+  truthy(schema.safeParse({ message: "hola" }).success, "acepta que falte la clave");
+  truthy(schema.safeParse({ message: "hola", threadId: "t1" }).success, "acepta un hilo existente");
+  truthy(!schema.safeParse({ message: "", threadId: null }).success, "sigue rechazando mensaje vacio");
+  truthy(!schema.safeParse({ message: "hola", threadId: "" }).success, "y un hilo vacio");
+}
+
+console.log("\n# el prompt del chat habla del motor en vez de esquivar la pregunta");
+{
+  truthy(!BASE_RULES.includes("No eres asesor"), "las reglas base ya no prohiben decir que comprar");
+  truthy(NO_ADVICE.includes("No des recomendaciones"), "la prohibicion sigue viva para los prompts descriptivos");
+  truthy(RISK_SYSTEM.includes(NO_ADVICE), "riesgo la mantiene");
+  truthy(!CHAT_SYSTEM.includes(NO_ADVICE), "el chat no la lleva");
+  truthy(/motor\s+determinista/.test(CHAT_SYSTEM) && CHAT_SYSTEM.includes("plan del mes"), "el chat sabe que tiene el veredicto y el plan delante");
+  truthy(CHAT_SYSTEM.includes("Nunca improvises un importe"), "y que no puede inventarse una cifra distinta");
+  truthy(CHAT_SYSTEM.includes("La app no opera"), "y que no ejecuta ordenes");
+  truthy(BASE_RULES.includes("Nunca inventes cifras"), "no inventar cifras sigue siendo regla de todos");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

@@ -170,13 +170,23 @@ export function PlanCard({ onSaved }: { onSaved?: () => void }) {
             )}
             {plan.equity.trims.length > 0 && (
               <div className="mt-3">
-                <p className="mb-1 text-xs font-medium text-warn">Recortar o vender</p>
-                <ul className="space-y-1">
+                <p className="mb-1 text-xs font-medium text-warn">
+                  Recortar o vender · {fmtMoney(plan.equity.trimTotal, currency)} en total
+                </p>
+                <ul className="divide-y divide-border rounded-lg border border-border">
                   {plan.equity.trims.map((t) => (
-                    <li key={t.symbol} className="flex items-start gap-2 text-xs text-muted">
+                    <li key={t.symbol} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                      <span className="w-16 font-semibold">{t.symbol}</span>
+                      <span className="tnum w-24 text-sm font-medium text-warn">
+                        −{fmtMoney(t.amount, currency)}
+                      </span>
                       <Badge tone={TONE[t.posture]}>{POSTURE_LABEL[t.posture]}</Badge>
-                      <span className="font-medium text-text">{t.symbol}</span>
-                      <span className="min-w-0 flex-1">{t.reason}</span>
+                      <span className="tnum text-xs text-faint">
+                        {t.shares !== null && `${t.shares} acc. · `}
+                        {t.pctOfPosition}% de la posicion · queda {fmtMoney(t.valueAfter, currency)} ({t.weightBefore}%
+                        → {t.weightAfter}%)
+                      </span>
+                      <span className="min-w-0 flex-1 text-xs text-muted">{t.reason}</span>
                     </li>
                   ))}
                 </ul>

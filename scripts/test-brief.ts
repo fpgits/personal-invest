@@ -90,6 +90,7 @@ const base: BriefInput = {
       reserveSymbol: "SGOV",
       reserveReason: null,
       trims: [],
+      trimTotal: 0,
       skipped: [],
     },
     crypto: {
@@ -333,6 +334,42 @@ console.log("\n# la zona de compra es un precio concreto, no 'algo mas de descue
   truthy(Boolean(item?.why.includes("$781")), "y el valor razonable del que sale");
   truthy(Boolean(item?.why.includes("5,1%")), "y cuanto falta desde hoy, con coma decimal");
   truthy(Boolean(item?.why.includes("convicción aguanta")), "y avisa de que el precio no es la unica condicion");
+}
+
+console.log("\n# 'Reduce AMZN' no es una instruccion: hace falta el importe");
+{
+  const withTrims = buildBrief({
+    ...base,
+    plan: {
+      ...base.plan,
+      equity: {
+        ...base.plan.equity,
+        trims: [
+          { symbol: "STX", posture: "reduce", amount: 2400, shares: 12, pctOfPosition: 24, valueBefore: 10_000, valueAfter: 7600, weightBefore: 14.3, weightAfter: 11.2, reason: "caro" },
+          { symbol: "TSLA", posture: "sell", amount: 10_000, shares: 40, pctOfPosition: 100, valueBefore: 10_000, valueAfter: 0, weightBefore: 14.3, weightAfter: 0, reason: "roto" },
+        ],
+        trimTotal: 12_400,
+      },
+    },
+  });
+
+  const stx = withTrims.week.items.find((i) => i.symbol === "STX" && i.action === "reducir")!;
+  truthy(stx.title.includes("$2.400"), `el titular lleva el importe: ${stx.title}`);
+  truthy(stx.why.includes("12 acciones"), "y las acciones");
+  truthy(stx.why.includes("24% de la posición"), "y que parte de la posicion es");
+  truthy(stx.why.includes("te quedan $7.600"), "y con cuanto te quedas");
+  eq(stx.amount, 2400, "el importe tambien va en el campo, no solo en el texto");
+
+  const tsla = withTrims.week.items.find((i) => i.symbol === "TSLA" && i.action === "vender")!;
+  truthy(tsla.title.includes("$10.000"), `una venta entera tambien: ${tsla.title}`);
+  truthy(tsla.why.includes("te quedan $0"), "y deja la posicion a cero");
+
+  truthy(withTrims.week.headline.includes("$12.400"), `el titular de la semana dice el total: ${withTrims.week.headline}`);
+
+  // Sin importe calculado (p. ej. sin posicion) el texto no se inventa nada.
+  const noSize = buildBrief(base).week.items.find((i) => i.symbol === "STX" && i.action === "reducir")!;
+  truthy(!noSize.title.includes("$"), `sin recorte dimensionado no se inventa cifra: ${noSize.title}`);
+  truthy(!/te quedan/.test(noSize.why), "ni habla de lo que queda");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

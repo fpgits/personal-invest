@@ -4,7 +4,7 @@ import { assets, events, fundamentals, theses, thesisAssumptions, thesisChanges,
 import type { Plan } from "./allocation";
 import { money } from "./brief-format";
 import type { ConvictionResult } from "./conviction";
-import { runMonthlyPlan, type RunHolding } from "./conviction-run";
+import { cachedMonthlyPlan, type RunHolding } from "./conviction-run";
 import type { CryptoPlan } from "./crypto-cycle";
 import { getMacro } from "./macro";
 
@@ -193,16 +193,23 @@ const verdictsProvider: BriefProvider = {
       const expensive = up !== null && up <= -20;
       const weak = weakest(r);
       const inPlan = ctx.plan.equity.lines.find((l) => l.symbol === r.symbol)?.amount ?? null;
+      const trim = ctx.plan.equity.trims.find((t) => t.symbol === r.symbol) ?? null;
+      // "Reduce AMZN" no es una instruccion; "vende $2.400" si lo es.
+      const howMuch = trim
+        ? ` Vende ${money(trim.amount, ctx.currency)}${trim.shares !== null ? ` (${trim.shares} acciones)` : ""}, el ${trim.pctOfPosition}% de la posición; te quedan ${money(trim.valueAfter, ctx.currency)}.`
+        : "";
 
       if (r.posture === "sell") {
         week.push({
           action: "vender",
           symbol: r.symbol,
-          title: `Vende ${r.symbol}`,
-          why: expensive
-            ? `Está un ${pct(up)} por encima de lo que vale y el negocio no lo sostiene${weak ? `: ${weak}` : ""}.`
-            : `El negocio se ha deteriorado${weak ? `: ${weak}` : ""}.`,
-          amount: null,
+          title: trim ? `Vende ${r.symbol}: ${money(trim.amount, ctx.currency)}` : `Vende ${r.symbol}`,
+          why: `${
+            expensive
+              ? `Está un ${pct(up)} por encima de lo que vale y el negocio no lo sostiene${weak ? `: ${weak}` : ""}.`
+              : `El negocio se ha deteriorado${weak ? `: ${weak}` : ""}.`
+          }${howMuch}`,
+          amount: trim?.amount ?? null,
           href: "/invest/analisis",
           source: "veredicto",
         });
@@ -210,11 +217,11 @@ const verdictsProvider: BriefProvider = {
         week.push({
           action: "reducir",
           symbol: r.symbol,
-          title: `Reduce ${r.symbol}`,
+          title: trim ? `Reduce ${r.symbol}: ${money(trim.amount, ctx.currency)}` : `Reduce ${r.symbol}`,
           why: expensive
-            ? `Buen negocio pero muy caro: cotiza un ${pct(up)} por encima de su valor razonable. Toma beneficios, sin prisa.`
-            : `Fundamentales flojos${weak ? `: ${weak}` : ""}. No metas más dinero y recorta si necesitas liquidez.`,
-          amount: null,
+            ? `Buen negocio pero muy caro: cotiza un ${pct(up)} por encima de su valor razonable. Toma beneficios, sin prisa.${howMuch}`
+            : `Fundamentales flojos${weak ? `: ${weak}` : ""}. No metas más dinero.${howMuch}`,
+          amount: trim?.amount ?? null,
           href: "/invest/analisis",
           source: "veredicto",
         });
@@ -588,8 +595,12 @@ export function buildBrief(input: BriefInput, providers: BriefProvider[] = PROVI
   const nReview = count("revisar");
   const nGood = count("buena_senal") + count("comprar");
   const bits: string[] = [];
+  // El importe total va en el titular: ocho recortes suena a mucho o a poco
+  // segun cuanto dinero sean, y esa es la cifra que hay que ver de un vistazo.
+  const sold = eq.trimTotal > 0 ? ` por ${money(eq.trimTotal, currency)}` : "";
   if (nSell) bits.push(`${nSell} venta${nSell > 1 ? "s" : ""}`);
   if (nReduce) bits.push(`${nReduce} recorte${nReduce > 1 ? "s" : ""}`);
+  if ((nSell || nReduce) && sold) bits[bits.length - 1] += sold;
   if (nReview) bits.push(`${nReview} cosa${nReview > 1 ? "s" : ""} que revisar`);
   if (nGood) bits.push(`${nGood} señal${nGood > 1 ? "es" : ""} a favor`);
   const weekHeadline = week.length === 0 ? "Esta semana no hay nada urgente. Sigue el plan del mes." : `Esta semana: ${bits.join(", ")}.`;
@@ -629,7 +640,7 @@ let memo: { at: number; value: Brief } | null = null;
 export async function getBrief(opts: { force?: boolean } = {}, now = Date.now()): Promise<Brief> {
   if (!opts.force && memo && now - memo.at < TTL_MS) return memo.value;
 
-  const plan = await runMonthlyPlan({ save: false });
+  const plan = await cachedMonthlyPlan({ force: opts.force }, now);
   const run = plan.run;
   const known = [...run.holdings, ...run.candidates];
   const knownIds = known.map((h) => h.assetId);

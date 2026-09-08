@@ -34,7 +34,7 @@ export const DEFAULT_ALLOCATION: AllocationSettings = {
   roundTo: 10,
 };
 
-export type Holding = { symbol: string; value: number };
+export type Holding = { symbol: string; value: number; price?: number | null };
 
 export type PlanLine = {
   symbol: string;
@@ -49,6 +49,27 @@ export type PlanLine = {
 
 export type PlanNote = { symbol: string; posture: Posture; reason: string };
 
+/**
+ * Una venta con tamano. "Reduce AMZN" no es una instruccion: hace falta
+ * cuanto. Esto dice cuanto vender, cuantas acciones son y con que te quedas.
+ */
+export type TrimLine = {
+  symbol: string;
+  posture: Posture;
+  /** Dolares a vender. */
+  amount: number;
+  /** Acciones aproximadas (hacia abajo), null si no se conoce el precio. */
+  shares: number | null;
+  /** Que porcentaje de la posicion supone. */
+  pctOfPosition: number;
+  valueBefore: number;
+  /** Lo que queda despues de vender. */
+  valueAfter: number;
+  weightBefore: number;
+  weightAfter: number;
+  reason: string;
+};
+
 export type Plan = {
   cash: number;
   totalBefore: number;
@@ -57,14 +78,36 @@ export type Plan = {
   reserve: number;
   reserveSymbol: string | null;
   reserveReason: string | null;
-  /** Posiciones que el motor pide recortar o vender. */
-  trims: PlanNote[];
+  /** Posiciones que el motor pide recortar o vender, con importe. */
+  trims: TrimLine[];
+  /** Suma de las ventas propuestas. */
+  trimTotal: number;
   /** Lo que no recibe dinero nuevo y por que. */
   skipped: PlanNote[];
 };
 
 const BUY_POSTURES: Posture[] = ["strong_buy", "buy"];
 const TRIM_POSTURES: Posture[] = ["reduce", "sell"];
+
+/** Recorte minimo y maximo de una posicion que solo esta cara (no rota). */
+export const TRIM_MIN_PCT = 20;
+export const TRIM_MAX_PCT = 60;
+
+/**
+ * Que fraccion de la posicion vender. Escala con lo cara que esta, en vez de
+ * ser un salto: un 25% por encima del valor razonable no pide lo mismo que un
+ * 300%. Una postura de venta sale entera; el resto se queda entre
+ * TRIM_MIN_PCT y TRIM_MAX_PCT, porque un buen negocio caro no se liquida.
+ * `upsidePct` es negativo cuando el precio esta por encima del valor. Puro.
+ */
+export function trimFraction(posture: Posture, upsidePct: number | null): number {
+  if (posture === "sell" || posture === "avoid") return 100;
+  if (upsidePct === null || !Number.isFinite(upsidePct)) return TRIM_MIN_PCT;
+  const over = Math.max(0, -upsidePct);
+  // -25% -> 20%; -50% -> 40%; -70% o peor -> 60%.
+  const pct = TRIM_MIN_PCT + ((over - 25) * (TRIM_MAX_PCT - TRIM_MIN_PCT)) / (70 - 25);
+  return Math.max(TRIM_MIN_PCT, Math.min(TRIM_MAX_PCT, Math.round(pct)));
+}
 
 /** Atractivo: conviccion inclinada por margen de seguridad (acotado). */
 export function attractiveness(score: number, marginOfSafetyPct: number | null): number {
@@ -122,8 +165,10 @@ export function allocate(args: {
   const totalAfter = totalBefore + cash;
   const wBefore = (s: string) => (totalBefore > 0 ? ((valueOf.get(s) ?? 0) / totalBefore) * 100 : 0);
 
-  const trims: PlanNote[] = [];
+  const priceOf = new Map(args.holdings.map((h) => [h.symbol, h.price ?? null]));
+  const trims: TrimLine[] = [];
   const skipped: PlanNote[] = [];
+  const trimTotalOf = () => trims.reduce((s, t) => s + t.amount, 0);
   const empty = (reserveReason: string | null): Plan => ({
     cash,
     totalBefore,
@@ -133,11 +178,52 @@ export function allocate(args: {
     reserveSymbol: settings.reserveSymbol,
     reserveReason,
     trims,
+    trimTotal: trimTotalOf(),
     skipped,
   });
 
   for (const v of args.verdicts) {
-    if (TRIM_POSTURES.includes(v.posture)) trims.push({ symbol: v.symbol, posture: v.posture, reason: v.rationale });
+    if (!TRIM_POSTURES.includes(v.posture)) continue;
+    const valueBefore = valueOf.get(v.symbol) ?? 0;
+    // Sin posicion (o sin valor) no hay nada que recortar.
+    if (valueBefore <= 0) continue;
+
+    const pct = trimFraction(v.posture, v.upsidePct);
+    // El tope por posicion manda si pide vender mas que la fraccion: una
+    // posicion que se comio la cartera se recorta hasta el tope aunque el
+    // precio no este disparatado.
+    const byFraction = (valueBefore * pct) / 100;
+    const overCap = Math.max(0, valueBefore - (totalBefore * settings.maxWeightPct) / 100);
+    const raw = Math.min(valueBefore, Math.max(byFraction, overCap));
+    const amount = Math.min(valueBefore, roundTo(raw, step));
+
+    // Migajas no: por debajo del ticket minimo, vender cuesta mas de lo que
+    // arregla. Se queda como nota sin importe.
+    if (amount < settings.minTicket && amount < valueBefore) {
+      skipped.push({
+        symbol: v.symbol,
+        posture: v.posture,
+        reason: `el recorte que pide (${Math.round(pct)}%) queda por debajo del ticket minimo: dejalo estar`,
+      });
+      continue;
+    }
+
+    const price = priceOf.get(v.symbol) ?? null;
+    const valueAfter = Math.max(0, valueBefore - amount);
+    trims.push({
+      symbol: v.symbol,
+      posture: v.posture,
+      amount,
+      shares: price !== null && price > 0 ? Math.floor(amount / price) : null,
+      pctOfPosition: Math.round((amount / valueBefore) * 100),
+      valueBefore: Math.round(valueBefore),
+      valueAfter: Math.round(valueAfter),
+      weightBefore: Math.round(wBefore(v.symbol) * 10) / 10,
+      // Tras vender, el total baja en el mismo importe.
+      weightAfter:
+        totalBefore - amount > 0 ? Math.round((valueAfter / (totalBefore - amount)) * 1000) / 10 : 0,
+      reason: v.rationale,
+    });
   }
   if (cash <= 0) return empty(null);
 
@@ -264,6 +350,7 @@ export function allocate(args: {
     reserveSymbol: settings.reserveSymbol,
     reserveReason,
     trims,
+    trimTotal: trimTotalOf(),
     skipped,
   };
 }

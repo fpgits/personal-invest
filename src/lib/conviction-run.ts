@@ -156,7 +156,8 @@ export async function runMonthlyPlan(opts: {
   const equityVerdicts = run.results.filter((r) => !cryptoSymbols.has(r.symbol));
   const equity = allocate({
     cash: equityCash,
-    holdings: equityHoldings.map((h) => ({ symbol: h.symbol, value: h.value })),
+    // El precio va tambien: sin el, un recorte no se puede expresar en acciones.
+    holdings: equityHoldings.map((h) => ({ symbol: h.symbol, value: h.value, price: h.price })),
     verdicts: equityVerdicts,
     settings: {
       maxWeightPct: settings.maxWeightPct,
@@ -210,4 +211,23 @@ export async function runMonthlyPlan(opts: {
   }
 
   return { equity, crypto, settings, run, batchId };
+}
+
+/**
+ * El plan es caro (EDGAR + Finnhub + FRED sobre toda la cartera y la
+ * watchlist), asi que se memoiza y lo comparten todos los que lo necesitan:
+ * "Que hacer" y el contexto del chat. Sin esto, abrir el chat volveria a
+ * correr el oraculo entero y tardaria decenas de segundos.
+ */
+const PLAN_TTL_MS = 30 * 60_000;
+let planMemo: { at: number; value: MonthlyPlan } | null = null;
+
+export async function cachedMonthlyPlan(
+  opts: { force?: boolean } = {},
+  now = Date.now(),
+): Promise<MonthlyPlan> {
+  if (!opts.force && planMemo && now - planMemo.at < PLAN_TTL_MS) return planMemo.value;
+  const value = await runMonthlyPlan({ save: false });
+  planMemo = { at: now, value };
+  return value;
 }
