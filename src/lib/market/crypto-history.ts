@@ -46,7 +46,7 @@ export type History = { closes: number[]; source: "binance" | "coingecko" | "non
 const TTL_MS = 12 * 60 * 60_000;
 const memo = new Map<string, { at: number; value: History }>();
 
-async function fromBinance(symbol: string, days: number): Promise<number[]> {
+async function fromBinanceDated(symbol: string, days: number): Promise<Array<{ openTime: number; close: number }>> {
   const pair = binanceSymbol(symbol);
   const all: Array<{ openTime: number; close: number }> = [];
   let endTime: number | undefined;
@@ -68,7 +68,28 @@ async function fromBinance(symbol: string, days: number): Promise<number[]> {
   // Puede haber solapes entre tandas: se deduplica por día.
   const byDay = new Map<number, number>();
   for (const k of all) byDay.set(k.openTime, k.close);
-  return [...byDay.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c).slice(-days);
+  return [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([openTime, close]) => ({ openTime, close }))
+    .slice(-days);
+}
+
+async function fromBinance(symbol: string, days: number): Promise<number[]> {
+  return (await fromBinanceDated(symbol, days)).map((k) => k.close);
+}
+
+/**
+ * Cierres CON fecha (YYYY-MM-DD), para la memoria de patrones: ahí hace falta
+ * saber cuándo fue cada máximo, no solo cuánto. Solo Binance: sin fechas
+ * fiables no hay episodio que valga.
+ */
+export async function datedCloses(symbol: string, days = 4000): Promise<Array<{ date: string; close: number }>> {
+  try {
+    const rows = await fromBinanceDated(symbol, days);
+    return rows.map((k) => ({ date: new Date(k.openTime).toISOString().slice(0, 10), close: k.close }));
+  } catch {
+    return [];
+  }
 }
 
 export async function dailyCloses(symbol: string, days = HISTORY_DAYS, now = Date.now()): Promise<History> {

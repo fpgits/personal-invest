@@ -8,10 +8,10 @@ import type { ConvictionCall } from "@/db/schema";
 import { POSTURE_LABEL, type Posture } from "@/lib/conviction-labels";
 // CycleStatsRow ya trae su propia etiqueta: asi el panel no importa
 // crypto-cycle (que arrastra la descarga de historicos al bundle del navegador).
-import type { CycleStatsRow, PostureStats } from "@/lib/conviction-calls";
+import type { CycleStatsRow, PostureStats, SpecialStats } from "@/lib/conviction-calls";
 import { api, cn, fmtDate } from "@/lib/utils";
 
-type History = { calls: ConvictionCall[]; stats: PostureStats[]; cycleStats: CycleStatsRow[]; asOf: number };
+type History = { calls: ConvictionCall[]; stats: PostureStats[]; cycleStats: CycleStatsRow[]; specialStats?: SpecialStats; asOf: number };
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -36,6 +36,7 @@ const CYCLE_LABEL: Record<string, string> = {
 function callLabel(c: ConvictionCall): string {
   if (c.kind === "benchmark") return "Indice";
   if (c.kind === "cycle") return CYCLE_LABEL[c.posture] ?? c.posture;
+  if (c.kind === "special") return "Apuesta";
   return POSTURE_LABEL[c.posture as Posture] ?? c.posture;
 }
 
@@ -44,6 +45,7 @@ function callTone(c: ConvictionCall): "up" | "down" | "warn" | "neutral" | "acce
   if (c.kind === "cycle") {
     return c.posture === "cycle_extra" ? "up" : c.posture === "cycle_hold" ? "warn" : "accent";
   }
+  if (c.kind === "special") return "accent";
   if (c.posture === "buy" || c.posture === "strong_buy") return "up";
   if (c.posture === "hold") return "accent";
   if (c.posture === "reduce") return "warn";
@@ -73,6 +75,7 @@ export function HistoryCard({ refreshKey = 0 }: { refreshKey?: number }) {
 
   const stats = (data?.stats ?? []).filter((s) => s.n > 0);
   const cycle = (data?.cycleStats ?? []).filter((s) => s.n > 0);
+  const special = data?.specialStats && data.specialStats.n > 0 ? data.specialStats : null;
   const anyDue = stats.some((s) => HORIZONS.some((h) => s.counts[h] > 0));
 
   return (
@@ -187,6 +190,36 @@ export function HistoryCard({ refreshKey = 0 }: { refreshKey?: number }) {
           <p className="mt-2 text-xs text-faint">
             Aqui acertar es distinto: en un aporte extra, que subiera; en un tramo retenido o un aporte reducido
             cerca del maximo, que siguiera cayendo. Es la unica forma de saber si esperar la senal vale la pena.
+          </p>
+        </div>
+      )}
+
+
+      {special && (
+        <div className="mt-5">
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+            Apuestas (situaciones especiales) · se miden como cesta
+          </h4>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <span>
+              <span className="text-faint">N</span> <span className="tnum">{special.n}</span>
+            </span>
+            {HORIZONS.map((h) => (
+              <span key={h}>
+                <span className="text-faint">{h}d</span> <Ret v={special.avg[h]} />
+                {special.hitRate[h] !== null && <span className="ml-1 text-xs text-faint">({special.hitRate[h]}% suben)</span>}
+              </span>
+            ))}
+            {special.best90 !== null && (
+              <span>
+                <span className="text-faint">mejor/peor a 90d</span> <Ret v={special.best90} /> / <Ret v={special.worst90} />
+              </span>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-faint">
+            Una apuesta acierta si sube. En una cesta, la distribucion importa mas que la media: una que
+            hace +180% paga por varias que se van a cero. La tasa de acierto real de este detector no se
+            conoce hasta que haya filas vencidas; hasta entonces es criterio, no medida.
           </p>
         </div>
       )}

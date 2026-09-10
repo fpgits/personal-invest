@@ -7,6 +7,8 @@ import type { ConvictionResult } from "./conviction";
 import { cachedMonthlyPlan, type RunHolding } from "./conviction-run";
 import type { CryptoPlan } from "./crypto-cycle";
 import { getMacro } from "./macro";
+import { specialCandidates } from "./special-run";
+import { basketTicket, type SpecialResult } from "./special-situations";
 
 /**
  * "Qué hacer": la capa humana encima de todo lo demás. Traduce el veredicto,
@@ -24,10 +26,11 @@ import { getMacro } from "./macro";
  * poder testearlo; `getBrief` junta los datos.
  */
 
-export type BriefAction = "comprar" | "vender" | "reducir" | "revisar" | "buena_senal" | "esperar" | "vigilar";
+export type BriefAction = "comprar" | "apuesta" | "vender" | "reducir" | "revisar" | "buena_senal" | "esperar" | "vigilar";
 
 export const ACTION_LABEL: Record<BriefAction, string> = {
   comprar: "Compra",
+  apuesta: "Apuesta",
   vender: "Vende",
   reducir: "Reduce",
   revisar: "Revisa",
@@ -41,10 +44,11 @@ const ACTION_ORDER: Record<BriefAction, number> = {
   vender: 0,
   reducir: 1,
   comprar: 2,
-  revisar: 3,
-  buena_senal: 4,
-  esperar: 5,
-  vigilar: 6,
+  apuesta: 3,
+  revisar: 4,
+  buena_senal: 5,
+  esperar: 6,
+  vigilar: 7,
 };
 
 export type BriefItem = {
@@ -94,6 +98,8 @@ export type BriefInput = {
   watchTargets: Array<{ symbol: string; targetPrice: number; direction: "above" | "below" | null; price: number | null }>;
   /** Contexto macro (FRED). */
   macro: { tenY: number | null; spread10y2y: number | null } | null;
+  /** Situaciones especiales detectadas (carril aparte del oráculo). */
+  special: SpecialResult[];
 };
 
 const DAY = 86400_000;
@@ -511,6 +517,45 @@ const cryptoProvider: BriefProvider = {
   },
 };
 
+/**
+ * Situaciones especiales: opcionalidad barata. NUNCA sale como compra: sale
+ * como apuesta, con tamaño de cesta y el riesgo dicho en voz alta. Es otra
+ * disciplina que el oráculo y va en su propio carril para no contaminarlo.
+ */
+const specialProvider: BriefProvider = {
+  name: "situaciones especiales",
+  run: (ctx) => {
+    const week: BriefItem[] = [];
+    const watch: BriefItem[] = [];
+    const portfolio = ctx.plan.equity.totalBefore;
+    for (const r of ctx.special) {
+      if (r.tier === "apuesta") {
+        const ticket = basketTicket(portfolio, 0);
+        week.push({
+          action: "apuesta",
+          symbol: r.symbol,
+          title: `${r.symbol}: apuesta asimétrica${ticket > 0 ? ` de ${money(ticket, ctx.currency)}` : ""}`,
+          why: `${r.reason}. ${r.risk} Tamaño de cesta: nunca más del 2% de la cartera por idea.`,
+          amount: ticket > 0 ? ticket : null,
+          href: "/invest/historicos",
+          source: "situaciones especiales",
+        });
+      } else if (r.tier === "vigilar") {
+        watch.push({
+          action: "vigilar",
+          symbol: r.symbol,
+          title: `${r.symbol} tiene pinta de situación especial, pero le falta el catalizador`,
+          why: `${r.reason}. Si un filing dice que busca comprador o alguien declara una participación, cambia de categoría.`,
+          amount: null,
+          href: "/invest/historicos",
+          source: "situaciones especiales",
+        });
+      }
+    }
+    return { week, watch };
+  },
+};
+
 /** El registro. El orden importa solo para desempatar; cada bloque se reordena por acción. */
 export const PROVIDERS: BriefProvider[] = [
   verdictsProvider,
@@ -520,6 +565,7 @@ export const PROVIDERS: BriefProvider[] = [
   earningsProvider,
   watchTargetsProvider,
   cryptoProvider,
+  specialProvider,
   macroProvider,
 ];
 
@@ -681,6 +727,7 @@ export async function getBrief(opts: { force?: boolean } = {}, now = Date.now())
       .innerJoin(assets, eq(watchlist.assetId, assets.id)),
     getMacro().catch(() => null),
   ]);
+  const special = await specialCandidates(now).catch(() => [] as SpecialResult[]);
 
   const earnings = fund
     .filter((f) => f.nextEarningsAt !== null)
@@ -717,6 +764,7 @@ export async function getBrief(opts: { force?: boolean } = {}, now = Date.now())
     thesisStatus: [...statusBySymbol.values()],
     watchTargets,
     macro: macro && macro.available ? { tenY: macro.tenY, spread10y2y: macro.spread10y2y } : null,
+    special,
   });
   memo = { at: now, value };
   return value;

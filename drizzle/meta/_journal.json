@@ -85,6 +85,13 @@
       "when": 1788619346362,
       "tag": "0011_insider_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789055332067,
+      "tag": "0012_runup_episodes",
+      "breakpoints": true
     }
   ]
 }

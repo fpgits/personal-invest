@@ -20,6 +20,7 @@ const fetcher = async (url: string) => {
 /** Verbo y color por acción. */
 const ACTION: Record<BriefAction, { label: string; cls: string }> = {
   comprar: { label: "Compra", cls: "bg-up text-white" },
+  apuesta: { label: "Apuesta", cls: "bg-accent text-white" },
   vender: { label: "Vende", cls: "bg-down text-white" },
   reducir: { label: "Reduce", cls: "bg-warn text-white" },
   revisar: { label: "Revisa", cls: "bg-warn text-white" },

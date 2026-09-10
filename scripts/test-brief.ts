@@ -119,6 +119,7 @@ const base: BriefInput = {
   thesisStatus: [],
   watchTargets: [],
   macro: null,
+  special: [],
 };
 
 console.log("\n# esta semana");
@@ -370,6 +371,33 @@ console.log("\n# 'Reduce AMZN' no es una instruccion: hace falta el importe");
   const noSize = buildBrief(base).week.items.find((i) => i.symbol === "STX" && i.action === "reducir")!;
   truthy(!noSize.title.includes("$"), `sin recorte dimensionado no se inventa cifra: ${noSize.title}`);
   truthy(!/te quedan/.test(noSize.why), "ni habla de lo que queda");
+}
+
+console.log("\n# situaciones especiales: apuesta, nunca compra, con tamaño de cesta");
+{
+  const gopro = {
+    symbol: "GPRO",
+    score: 84,
+    tier: "apuesta" as const,
+    components: [],
+    reason: "EV/ventas 0.46, $125M de capitalización, -96% desde máximos · apuro: going concern · catalizador: busca venta o fusión",
+    risk: "Puede irse a cero: hay duda sobre su continuidad.",
+    asymmetric: true,
+  };
+  const maybe = { ...gopro, symbol: "XYZ", score: 55, tier: "vigilar" as const, asymmetric: false };
+  const b = buildBrief({ ...base, special: [gopro, maybe] });
+  const bet = b.week.items.find((i) => i.symbol === "GPRO")!;
+  eq(bet.action, "apuesta", "sale como apuesta, no como compra");
+  truthy(bet.title.includes("$1.400"), `con tamaño: 2% de los $70.000 de cartera (${bet.title})`);
+  eq(bet.amount, 1400, "el importe va en el campo");
+  truthy(bet.why.includes("cero") && bet.why.includes("2%"), "dice el riesgo y el tope por idea");
+  truthy(!/\bcompra\b/i.test(bet.title), "la palabra compra no aparece en el titular");
+  truthy(b.watch.items.some((i) => i.symbol === "XYZ" && i.action === "vigilar"), "la que le falta catalizador va a vigilar");
+  truthy(b.sources.includes("situaciones especiales"), "el proveedor figura en las fuentes");
+  // Orden: la apuesta va después de las compras normales, antes de revisar.
+  const order = b.week.items.map((i) => i.action);
+  truthy(order.indexOf("apuesta") > order.lastIndexOf("comprar"), "detrás de las compras");
+  truthy(order.indexOf("apuesta") < order.indexOf("revisar"), "y delante de lo que hay que revisar");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

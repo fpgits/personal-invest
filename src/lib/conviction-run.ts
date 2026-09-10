@@ -6,6 +6,8 @@ import { companyFinancials } from "./edgar-facts";
 import { getFundamentalsMap } from "./fundamentals";
 import { evaluate, rankResults, type ConvictionResult } from "./conviction";
 import { recordBatch } from "./conviction-calls";
+import { specialCandidates } from "./special-run";
+import { basketTicket } from "./special-situations";
 import { cryptoPlan, cycleStatsFor, parseCore, type CryptoPlan } from "./crypto-cycle";
 import { getMacro, riskFreeRate } from "./macro";
 import { getCachedQuotes } from "./market";
@@ -206,6 +208,21 @@ export async function runMonthlyPlan(opts: {
         planAmount: l.amount,
         reason: l.reason,
       })),
+      // Las apuestas de situacion especial tambien se registran, con su
+      // propio kind, para conocer algun dia la tasa de acierto real.
+      specialItems: (await specialCandidates().catch(() => []))
+        .filter((r) => r.tier === "apuesta")
+        .map((r) => {
+          const h = bySymbol.get(r.symbol);
+          return {
+            symbol: r.symbol,
+            assetId: h?.assetId ?? null,
+            score: r.score,
+            price: h && h.price > 0 ? h.price : null,
+            planAmount: basketTicket(equity.totalBefore, 0) || null,
+            reason: r.reason,
+          };
+        }),
       benchmark: bench ? { symbol: bench.symbol, assetId: bench.assetId, price: bench.price } : null,
     });
   }

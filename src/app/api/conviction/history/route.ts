@@ -1,5 +1,5 @@
 import { protectedRoute } from "@/lib/api";
-import { listCalls, summarizeCalls, summarizeCycleCalls } from "@/lib/conviction-calls";
+import { listCalls, summarizeCalls, summarizeCycleCalls, summarizeSpecialCalls } from "@/lib/conviction-calls";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export const GET = protectedRoute(async () => {
     calls,
     stats: summarizeCalls(calls),
     cycleStats: summarizeCycleCalls(calls),
+    specialStats: summarizeSpecialCalls(calls),
     asOf: Date.now(),
   });
 });

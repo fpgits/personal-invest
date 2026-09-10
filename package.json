@@ -27,12 +27,16 @@
     "test:edgar-facts": "tsx scripts/test-edgar-facts.ts",
     "test:conviction": "tsx scripts/test-conviction.ts",
     "test:valuation": "tsx scripts/test-valuation.ts",
-    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:ai && npm run test:cashflows && npm run test:group && npm run test:macro && npm run test:edgar-facts && npm run test:valuation && npm run test:conviction && npm run test:allocation && npm run test:insiders && npm run test:brief && npm run test:gate && npm run test:oracle:db && npm run test:intel:db",
+    "test": "npm run test:pnl && npm run test:ibkr && npm run test:intel && npm run test:sources && npm run test:managers && npm run test:period && npm run test:history && npm run test:ai && npm run test:cashflows && npm run test:group && npm run test:macro && npm run test:edgar-facts && npm run test:valuation && npm run test:conviction && npm run test:allocation && npm run test:insiders && npm run test:brief && npm run test:gate && npm run test:runups && npm run test:fundamentals-at && npm run test:special-signals && npm run test:special && npm run test:oracle:db && npm run test:intel:db",
     "test:oracle:db": "tsx scripts/test-oracle-db.ts",
     "test:allocation": "tsx scripts/test-allocation.ts",
     "test:insiders": "tsx scripts/test-insiders.ts",
     "test:brief": "tsx scripts/test-brief.ts",
-    "test:gate": "tsx scripts/test-gate.ts"
+    "test:gate": "tsx scripts/test-gate.ts",
+    "test:runups": "tsx scripts/test-runups.ts",
+    "test:fundamentals-at": "tsx scripts/test-fundamentals-at.ts",
+    "test:special-signals": "tsx scripts/test-special-signals.ts",
+    "test:special": "tsx scripts/test-special.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",

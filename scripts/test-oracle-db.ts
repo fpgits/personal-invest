@@ -199,6 +199,40 @@ async function main() {
   eq(extra.hitRate[90], 100, "el aporte extra acerto: subio");
   eq(held.label, "Tramo retenido", "la fila trae su etiqueta lista para la UI");
 
+  console.log("\n# apuestas de situacion especial: se registran y se miden como cesta");
+  const { summarizeSpecialCalls } = await import("../src/lib/conviction-calls");
+  const t2 = Date.parse("2026-03-01T00:00:00Z");
+  await db.insert(assets).values([
+    { id: "s1", symbol: "GPRO", name: "GoPro", assetClass: "equity" },
+    { id: "s2", symbol: "DEAD", name: "Dead Co", assetClass: "equity" },
+  ]);
+  await db.insert(priceCache).values([
+    { assetId: "s1", price: 0.68, updatedAt: 1 },
+    { assetId: "s2", price: 2, updatedAt: 1 },
+  ]);
+  await recordBatch({
+    kind: "plan",
+    items: [],
+    specialItems: [
+      { symbol: "GPRO", assetId: "s1", score: 84, price: 0.68, planAmount: 1400, reason: "busca comprador" },
+      { symbol: "DEAD", assetId: "s2", score: 72, price: 2, planAmount: 1400, reason: "going concern" },
+    ],
+    now: t2,
+  });
+  const sp = (await listCalls()).filter((c) => c.kind === "special");
+  eq(sp.length, 2, "dos apuestas guardadas con kind special");
+  eq(sp[0].posture, "special_bet", "postura propia, no comprar");
+  truthy(!summarizeCalls(await listCalls()).some((s) => String(s.posture) === "special_bet"), "la tabla de bolsa no las mezcla");
+  // GPRO x2.5, DEAD a cero.
+  await db.update(priceCache).set({ price: 1.69 }).where(eqId(priceCache.assetId, "s1"));
+  await db.update(priceCache).set({ price: 0.01 }).where(eqId(priceCache.assetId, "s2"));
+  await markForwardReturns(t2 + 100 * DAY, async () => null);
+  const st = summarizeSpecialCalls(await listCalls());
+  eq(st.n, 2, "N = 2");
+  eq(st.hitRate[90], 50, "una de dos subio: 50%");
+  truthy(st.avg[90]! > 0, `y la cesta gana en media aunque una se fue a cero (${st.avg[90]}%)`);
+  truthy(st.best90! > 140 && st.worst90! < -99, `mejor +${st.best90}% / peor ${st.worst90}%: la distribucion, no la media`);
+
   console.log("\n# ajustes del oraculo");
   const d = oracleFromSettings({});
   eq(d, ORACLE_DEFAULTS, "sin ajustes, valores por defecto");

@@ -53,6 +53,20 @@ export type CycleCallItem = {
   reason: string;
 };
 
+/**
+ * Una apuesta de situación especial, para medirla aparte: aquí acertar es
+ * que subiera (es una apuesta a que el catalizador llega), y la tasa de
+ * acierto REAL de este detector no se conoce hasta que haya filas vencidas.
+ */
+export type SpecialCallItem = {
+  symbol: string;
+  assetId: string | null;
+  score: number;
+  price: number | null;
+  planAmount: number | null;
+  reason: string;
+};
+
 export type Benchmark = { symbol: string; assetId: string | null; price: number | null };
 
 /** Guarda una corrida completa. Devuelve el id del lote. */
@@ -61,6 +75,8 @@ export async function recordBatch(args: {
   items: CallItem[];
   /** Lineas de cripto de la misma corrida, guardadas con kind `cycle`. */
   cycleItems?: CycleCallItem[];
+  /** Apuestas de situacion especial, guardadas con kind `special`. */
+  specialItems?: SpecialCallItem[];
   benchmark?: Benchmark | null;
   now?: number;
 }): Promise<string> {
@@ -123,6 +139,26 @@ export async function recordBatch(args: {
       marginOfSafetyPct: null,
       planAmount: c.planAmount,
       rationale: c.reason,
+      calledAt: now,
+    });
+  }
+  for (const sp of args.specialItems ?? []) {
+    rows.push({
+      id: id(),
+      batchId,
+      kind: "special" as const,
+      assetId: sp.assetId,
+      symbol: sp.symbol,
+      assetClass: "equity",
+      posture: "special_bet",
+      score: sp.score,
+      confidence: 0,
+      price: sp.price,
+      fairValue: null,
+      upsidePct: null,
+      marginOfSafetyPct: null,
+      planAmount: sp.planAmount,
+      rationale: sp.reason,
       calledAt: now,
     });
   }
@@ -237,8 +273,8 @@ const SELL: Posture[] = ["reduce", "sell", "avoid"];
 
 export function summarizeCalls(rows: ConvictionCall[]): PostureStats[] {
   const groups = new Map<string, ConvictionCall[]>();
-  // Las llamadas de ciclo se miden aparte (summarizeCycleCalls).
-  for (const r of rows.filter((r) => r.kind !== "cycle")) {
+  // Las llamadas de ciclo y las apuestas se miden aparte.
+  for (const r of rows.filter((r) => r.kind !== "cycle" && r.kind !== "special")) {
     const key = r.kind === "benchmark" ? "benchmark" : r.posture;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
@@ -316,6 +352,40 @@ export function summarizeCycleCalls(rows: ConvictionCall[]): CycleStatsRow[] {
     out.push({ posture: key, label: CYCLE_POSTURE_LABEL[key], n: list.length, avg, counts, hitRate });
   }
   return out.sort((a, b) => CYCLE_ORDER.indexOf(a.posture) - CYCLE_ORDER.indexOf(b.posture));
+}
+
+export type SpecialStats = {
+  n: number;
+  avg: Record<Horizon, number | null>;
+  counts: Record<Horizon, number>;
+  /** Acierto = subio. Es una apuesta a un catalizador: o llega o no. */
+  hitRate: Record<Horizon, number | null>;
+  /** Mejor y peor retorno vencido a 90 dias: en una cesta, la distribucion importa mas que la media. */
+  best90: number | null;
+  worst90: number | null;
+};
+
+/** Mide las apuestas de situacion especial como cesta. Puro. */
+export function summarizeSpecialCalls(rows: ConvictionCall[]): SpecialStats {
+  const list = rows.filter((r) => r.kind === "special");
+  const avg = {} as Record<Horizon, number | null>;
+  const counts = {} as Record<Horizon, number>;
+  const hitRate = {} as Record<Horizon, number | null>;
+  for (const h of HORIZONS) {
+    const vals = list.map((r) => retAt(r, h)).filter((v): v is number => v !== null);
+    counts[h] = vals.length;
+    avg[h] = vals.length ? round(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+    hitRate[h] = vals.length ? round((vals.filter((v) => v > 0).length / vals.length) * 100) : null;
+  }
+  const r90 = list.map((r) => r.ret90).filter((v): v is number => v !== null);
+  return {
+    n: list.length,
+    avg,
+    counts,
+    hitRate,
+    best90: r90.length ? Math.max(...r90) : null,
+    worst90: r90.length ? Math.min(...r90) : null,
+  };
 }
 
 function retAt(r: ConvictionCall, h: Horizon): number | null {
