@@ -40,3 +40,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 _to_delete/
+
+# Descargas de la conversacion: si un archivo suelto cae dentro del repo,
+# TypeScript lo compila y rompe el build. Que no entre ni en git ni en tsc
+# (tsconfig.json tambien los excluye).
+Claude outputs/
+*.ts.new
+*.tsx.new
