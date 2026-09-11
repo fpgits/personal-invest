@@ -7,6 +7,7 @@
 import {
   buildFinancials,
   financialsToText,
+  mergeAnnual,
   multiples,
   pickAnnual,
   type ConceptPoint,
@@ -156,6 +157,29 @@ console.log("\n# FCF, deuda neta y acciones");
     1,
   );
   eq(noCapex.years[0].fcf, null, "sin capex, FCF null (no se asume capex cero)");
+}
+
+console.log("\n# mergeAnnual: empresas que cambian de tag a mitad de camino");
+{
+  const p = (fy: number, val: number): ConceptPoint => ({ fy, end: `${fy}-12-31`, val });
+
+  // El caso real de Amazon: capex bajo un tag hasta 2016 y bajo otro desde
+  // 2018. Con la regla vieja ("el primer tag que traiga algo") se perdian los
+  // anos recientes, y sin capex reciente no hay FCF ni DCF.
+  const amzn = mergeAnnual([
+    [p(2015, 3.44), p(2016, 4.89)],
+    [p(2018, 7.8), p(2019, 11.96), p(2024, 63.65)],
+  ]);
+  eq(amzn.map((x) => x.fy), [2015, 2016, 2018, 2019, 2024], "une los dos tramos y ordena");
+  eq(amzn.at(-1)?.val, 63.65, "el ultimo ejercicio ya tiene capex");
+
+  // NVDA: un unico punto viejo en el tag preferido, la serie util en el otro.
+  const nvda = mergeAnnual([[p(2011, 0.08)], [p(2024, 0.98), p(2026, 1.07)]]);
+  eq(nvda.map((x) => x.fy), [2011, 2024, 2026], "un punto suelto no tapa la serie buena");
+
+  // Donde los dos tienen el mismo ano, manda el primero de la lista.
+  eq(mergeAnnual([[p(2020, 10)], [p(2020, 99), p(2021, 5)]]), [p(2020, 10), p(2021, 5)], "gana el tag preferido, el otro rellena huecos");
+  eq(mergeAnnual([[], []]), [], "sin datos, lista vacia");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

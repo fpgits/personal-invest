@@ -70,17 +70,40 @@ async function annual(cik10: string, taxonomy: string, tag: string): Promise<Con
   }
 }
 
-/** Prueba varios tags en orden y se queda con el primero que traiga datos. */
-async function annualFirst(
+/**
+ * Une las series de varios tags que significan lo mismo, ano a ano: para cada
+ * ejercicio gana el primer tag de la lista que lo tenga.
+ *
+ * Antes esto era "el primer tag que traiga ALGO", y ahi habia un fallo serio:
+ * las empresas cambian de tag a mitad de su historia y el viejo se queda con
+ * los anos antiguos. NVDA declara PaymentsToAcquirePropertyPlantAndEquipment
+ * solo en 2011 y PaymentsToAcquireProductiveAssets de 2024 en adelante; Amazon
+ * usa el primero hasta 2016 y el segundo desde 2018. Con la regla vieja nos
+ * quedabamos con el tag antiguo, el capex del ultimo ejercicio salia vacio y
+ * con el el FCF: sin FCF no hay DCF, y el valor razonable de esas empresas
+ * pasaba a apoyarse SOLO en el multiplo de beneficios sin avisar de nada.
+ *
+ * Riesgo asumido: dos tags no son exactamente el mismo concepto (uno puede
+ * incluir intangibles). Por eso manda el orden de la lista, y solo se recurre
+ * al siguiente para los anos que el preferido no cubre. Puro y testeable.
+ */
+export function mergeAnnual(series: ConceptPoint[][]): ConceptPoint[] {
+  const byFy = new Map<number, ConceptPoint>();
+  for (const pts of series) {
+    for (const p of pts) if (!byFy.has(p.fy)) byFy.set(p.fy, p);
+  }
+  return [...byFy.values()].sort((a, b) => a.fy - b.fy);
+}
+
+/** Baja todos los tags equivalentes y los une por ejercicio (ver mergeAnnual). */
+async function annualMerged(
   cik10: string,
   taxonomy: string,
   tags: string[],
 ): Promise<ConceptPoint[]> {
-  for (const tag of tags) {
-    const pts = await annual(cik10, taxonomy, tag);
-    if (pts.length > 0) return pts;
-  }
-  return [];
+  const series: ConceptPoint[][] = [];
+  for (const tag of tags) series.push(await annual(cik10, taxonomy, tag));
+  return mergeAnnual(series);
 }
 
 export type FinancialYear = {
@@ -263,18 +286,18 @@ export async function companyFinancials(cik: string, now = Date.now()): Promise<
   // Dos tandas de cinco: la SEC admite ~10 peticiones/seg y el motor evalua
   // varias empresas a la vez.
   const [revenue, netIncome, eps, equity, shares] = await Promise.all([
-    annualFirst(cik10, "us-gaap", REVENUE_TAGS),
+    annualMerged(cik10, "us-gaap", REVENUE_TAGS),
     annual(cik10, "us-gaap", "NetIncomeLoss"),
     annual(cik10, "us-gaap", "EarningsPerShareDiluted"),
     annual(cik10, "us-gaap", "StockholdersEquity"),
-    annualFirst(cik10, "dei", ["EntityCommonStockSharesOutstanding"]),
+    annualMerged(cik10, "dei", ["EntityCommonStockSharesOutstanding"]),
   ]);
   const [ocf, capex, debt, cash, dilutedShares] = await Promise.all([
-    annualFirst(cik10, "us-gaap", OCF_TAGS),
-    annualFirst(cik10, "us-gaap", CAPEX_TAGS),
-    annualFirst(cik10, "us-gaap", DEBT_TAGS),
-    annualFirst(cik10, "us-gaap", CASH_TAGS),
-    annualFirst(cik10, "us-gaap", SHARES_TAGS),
+    annualMerged(cik10, "us-gaap", OCF_TAGS),
+    annualMerged(cik10, "us-gaap", CAPEX_TAGS),
+    annualMerged(cik10, "us-gaap", DEBT_TAGS),
+    annualMerged(cik10, "us-gaap", CASH_TAGS),
+    annualMerged(cik10, "us-gaap", SHARES_TAGS),
   ]);
 
   const view = buildFinancials(

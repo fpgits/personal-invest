@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { db } from "@/db";
-import { assets, news, runupEpisodes, type Asset, type RunupEpisode } from "@/db/schema";
+import { assets, news, type Asset } from "@/db/schema";
+import { runupEpisodes, type RunupEpisode } from "@/db/schema-runups";
 import { cycleStats, type CycleStats } from "./crypto-cycle";
 import { ensureCiks } from "./edgar";
 import { rawConceptsFor, snapshotAt, type Snapshot } from "./fundamentals-at";

@@ -81,7 +81,12 @@ export type ConvictionResult = {
   posture: Posture;
   /** 0..100. Puntuacion compuesta de conviccion. */
   score: number;
-  /** 0..1. Cuanta de la puntuacion se apoya en datos reales (no huecos). */
+  /**
+   * 0..1. Que tan solido es el veredicto: cobertura de datos MENOS los
+   * castigos por fragilidad (una sola pata de valoracion, sin historico
+   * EDGAR, beneficios raros, pico de ciclo, fuentes que se contradicen). No
+   * es "llegaron todos los datos": eso daba 100% a veredictos fragiles.
+   */
   confidence: number;
   dataQuality: "full" | "partial" | "insufficient";
   factors: Factor[];
@@ -244,6 +249,34 @@ export function risingStreak(margins: number[], current: number): number {
     else break;
   }
   return streak;
+}
+
+/**
+ * Confianza del veredicto. La version anterior era solo cobertura de datos
+ * (que fraccion del peso de los factores tenia cifra), y por eso NVDA salia
+ * con "confianza 100%" mientras su valor razonable colgaba de una sola pata y
+ * de un BPA que ningun 10-K respaldaba. Cobertura es condicion necesaria, no
+ * suficiente: aqui se le restan los motivos concretos para fiarse menos.
+ * Puro y testeable.
+ */
+export function confidenceOf(args: {
+  /** 0..1: peso de los factores que si tienen dato. */
+  coverage: number;
+  legs: FairValueDetail["legs"];
+  peakSeverity: number;
+  /** Hay historico anual de EDGAR (o no aplica, p. ej. cripto). */
+  edgar: boolean;
+  earningsOk: boolean;
+  epsMismatch: boolean;
+}): number {
+  let c = Math.max(0, Math.min(1, args.coverage));
+  if (args.epsMismatch) c -= 0.35;
+  else if (args.legs === 0) c -= 0.25;
+  else if (args.legs === 1) c -= 0.15;
+  if (!args.edgar) c -= 0.15;
+  if (!args.earningsOk) c -= 0.15;
+  c -= 0.1 * Math.max(0, Math.min(1, args.peakSeverity));
+  return round(Math.max(0.1, Math.min(1, c)), 2);
 }
 
 /** Mejora sostenida a partir de la cual se considera cambio estructural, no pico. */
@@ -609,6 +642,35 @@ export const PEG_PREMIUM_K = 1.0;
 export const PE_FLOOR = 8;
 export const PE_CEIL = 35;
 
+/**
+ * Cuanto puede separarse el BPA TTM del proveedor del ultimo BPA anual
+ * auditado antes de dejar de fiarnos de los dos. Tres veces ya es mucho para
+ * seis meses de diferencia.
+ */
+export const EPS_COHERENCE_RATIO = 3;
+
+/**
+ * Las dos fuentes tienen que contar la misma historia. El BPA TTM viene del
+ * proveedor de mercado (Finnhub) y el anual del 10-K de la SEC: si difieren
+ * por un multiplo, una de las dos esta mal y NO sabemos cual. Publicar un
+ * valor razonable en ese caso es inventarse una precision que no existe.
+ *
+ * Caso real que lo motivo (NVDA, sept 2026): el proveedor daba un PER de 28
+ * sobre un BPA TTM de $7,76, mientras el ultimo 10-K declaraba $1,19 por
+ * accion (29.760 M$ entre 24.940 M de acciones). El valor razonable salia de
+ * multiplicar por 35 el BPA del proveedor: $271,74, o sea un numero que
+ * ninguna cuenta presentada a la SEC respalda.
+ *
+ * Solo compara cuando ambos son positivos: salir de perdidas multiplica el
+ * BPA por lo que sea y eso no es incoherencia, es un ano malo que pasa.
+ */
+export function epsCoherent(epsTtm: number | null, financials: FinancialsView | null): boolean {
+  const annual = financials?.years.at(-1)?.eps ?? null;
+  if (!isFin(epsTtm) || epsTtm <= 0 || !isFin(annual) || annual <= 0) return true;
+  const ratio = epsTtm / annual;
+  return ratio <= EPS_COHERENCE_RATIO && ratio >= 1 / EPS_COHERENCE_RATIO;
+}
+
 export type FairValueDetail = {
   value: number | null;
   justifiedPe: number | null;
@@ -617,6 +679,13 @@ export type FairValueDetail = {
   method: "dcf" | "pe" | "blend" | null;
   discountPct: number | null;
   impliedGrowthPct: number | null;
+  /**
+   * Cuantas patas independientes sostienen el numero: 2 = DCF y multiplo
+   * coinciden en existir, 1 = una sola (mas fragil), 0 = ninguna.
+   */
+  legs: 0 | 1 | 2;
+  /** BPA TTM del proveedor frente al ultimo anual de EDGAR, si no cuadran. */
+  epsMismatch: { ttm: number; annual: number; ratio: number } | null;
 };
 
 const NO_FAIR: FairValueDetail = {
@@ -626,6 +695,8 @@ const NO_FAIR: FairValueDetail = {
   method: null,
   discountPct: null,
   impliedGrowthPct: null,
+  legs: 0,
+  epsMismatch: null,
 };
 
 /**
@@ -647,7 +718,25 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
   // en un pico. El DCF ya se corrige solo: proyecta el crecimiento decayendo
   // hacia el 3% durante diez anos, asi que forzarlo ademas al caso bajista era
   // cobrar dos veces por el mismo argumento.
-  const peakSeverity = peakCycle(input).severity;
+  const peak = peakCycle(input);
+
+  // Antes de valorar nada: si el BPA del proveedor y el del ultimo 10-K no
+  // cuentan la misma historia, no hay valor razonable que dar. Se corta aqui
+  // y no solo en la pata del PER porque el crecimiento que alimenta el DCF
+  // sale del mismo proveedor: si su BPA no es de fiar, su crecimiento tampoco.
+  const peRatio = input.fundamentals?.pe ?? null;
+  const epsProbe = isFin(peRatio) && peRatio > 0 ? price / peRatio : null;
+  if (!epsCoherent(epsProbe, input.financials ?? null)) {
+    const annual = input.financials?.years.at(-1)?.eps as number;
+    return {
+      ...NO_FAIR,
+      epsMismatch: {
+        ttm: round(epsProbe as number, 2),
+        annual: round(annual, 2),
+        ratio: round((epsProbe as number) / annual, 1),
+      },
+    };
+  }
 
   // Pata 1: DCF sobre FCF.
   let dcfValue: number | null = null;
@@ -674,12 +763,16 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
     if (isFin(epsTtm) && epsTtm > 0) {
       const required = (isFin(input.riskFreeRate) ? input.riskFreeRate : 4.0) + EQUITY_RISK_PREMIUM;
       const noGrowthPe = 100 / required;
-      // En pico de ciclo el BPA esta inflado, asi que la prima de crecimiento
-      // se recorta EN PROPORCION a lo marcado que este el pico: severidad 0
-      // deja la prima entera, severidad 1 la quita del todo.
-      const premium = Math.max(0, growth) * PEG_PREMIUM_K * (1 - peakSeverity);
+      const premium = Math.max(0, growth) * PEG_PREMIUM_K;
       justifiedPe = Math.max(PE_FLOOR, Math.min(PE_CEIL, noGrowthPe + premium));
-      peValue = round(epsTtm * justifiedPe, 2);
+      // El pico de ciclo se descuenta NORMALIZANDO EL BENEFICIO, no recortando
+      // la prima de crecimiento. La version anterior recortaba la prima, y en
+      // una empresa que crece mucho eso no hacia absolutamente nada: el PER ya
+      // estaba pegado al techo (PE_CEIL), asi que quitarle 20 puntos de prima
+      // lo dejaba igual de pegado al techo. El aviso decia "asume que ese
+      // margen no se sostiene" y la cuenta no lo asumia. Normalizar el BPA si
+      // muerde siempre, y en proporcion exacta a la severidad.
+      peValue = round(normalizedEps(epsTtm, peak) * justifiedPe, 2);
       justifiedPe = round(justifiedPe, 1);
     }
   }
@@ -688,12 +781,27 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
   const value =
     dcfValue !== null && peValue !== null ? round((dcfValue + peValue) / 2, 2) : ((dcfValue ?? peValue) as number);
   const method: FairValueDetail["method"] = dcfValue !== null && peValue !== null ? "blend" : dcfValue !== null ? "dcf" : "pe";
+  const legs: FairValueDetail["legs"] = dcfValue !== null && peValue !== null ? 2 : 1;
   // El rango se reescala al valor final para que bajista < valor < alcista siga siendo cierto.
   const scaledRange =
     range && dcfValue !== null && dcfValue > 0
       ? { bear: round((range.bear * value) / dcfValue, 2), base: value, bull: round((range.bull * value) / dcfValue, 2) }
       : null;
-  return { value, justifiedPe, range: scaledRange, method, discountPct, impliedGrowthPct };
+  return { value, justifiedPe, range: scaledRange, method, discountPct, impliedGrowthPct, legs, epsMismatch: null };
+}
+
+/**
+ * Beneficio por accion normalizado hacia su margen historico cuando hay pico
+ * de ciclo. Severidad 0 lo deja intacto, severidad 1 lo lleva entero a la
+ * mediana; en medio, interpola. Es la traduccion literal de lo que dice el
+ * aviso: "el valor razonable asume que ese margen no se sostiene". Puro.
+ */
+export function normalizedEps(epsTtm: number, peak: PeakCycle): number {
+  if (!peak.flagged || peak.severity <= 0) return epsTtm;
+  const { current, median } = peak;
+  if (!isFin(current) || !isFin(median) || current <= 0 || current <= median) return epsTtm;
+  const target = current - peak.severity * (current - median);
+  return epsTtm * (target / current);
 }
 
 // ---------------------------------------------------------------------------
@@ -708,9 +816,23 @@ export const BANDS: Array<[number, Posture]> = [
   [0, "avoid"],
 ];
 
-function candidatePosture(score: number): Posture {
+function scoreBand(score: number): Posture {
   for (const [min, p] of BANDS) if (score >= min) return p;
   return "avoid";
+}
+
+/**
+ * Postura para un candidato (sin posicion). La calidad manda, pero comprar
+ * algo NUEVO exige ademas que el precio acompane: sin valor razonable, o por
+ * encima de el, se queda en mantener. Antes bastaba con la puntuacion, y eso
+ * permitia que el plan mensual metiera dinero en una empresa excelente a
+ * cualquier precio.
+ */
+function candidatePosture(score: number, upsidePct: number | null, legs: FairValueDetail["legs"]): Posture {
+  const band = scoreBand(score);
+  if (band !== "strong_buy" && band !== "buy") return band;
+  if (legs === 0 || !isFin(upsidePct)) return "hold";
+  return upsidePct > buyUpsideBar(legs) ? band : "hold";
 }
 
 /**
@@ -723,17 +845,38 @@ function candidatePosture(score: number): Posture {
 export const TRIM_UPSIDE_EGREGIOUS = -45;
 /** Sobrevaloracion a partir de la cual se recorta un negocio mediocre. */
 export const TRIM_UPSIDE_MEDIOCRE = -25;
+/**
+ * Los mismos umbrales cuando el valor razonable se apoya en UNA sola pata.
+ * Una estimacion mas fragil tiene que pedir mas para mover dinero, y eso vale
+ * en los dos sentidos: ni comprar ni vender por un numero de fiabilidad media.
+ */
+export const TRIM_UPSIDE_EGREGIOUS_SINGLE = -65;
+export const TRIM_UPSIDE_MEDIOCRE_SINGLE = -40;
+/** Prima sobre el valor razonable que se tolera al comprar, con dos patas. */
+export const BUY_MAX_PREMIUM = -10;
+/** Con una sola pata no se paga prima: hace falta margen de verdad. */
+export const BUY_MIN_UPSIDE_SINGLE = 10;
 
-function heldPosture(score: number, upsidePct: number | null): Posture {
+/** Potencial minimo para que una compra sea compra, segun cuantas patas hay. */
+export function buyUpsideBar(legs: FairValueDetail["legs"]): number {
+  return legs >= 2 ? BUY_MAX_PREMIUM : BUY_MIN_UPSIDE_SINGLE;
+}
+
+function heldPosture(score: number, upsidePct: number | null, legs: FairValueDetail["legs"]): Posture {
   if (score < 30) return "sell";
   if (score < 42) return "reduce";
+  const egregious = legs >= 2 ? TRIM_UPSIDE_EGREGIOUS : TRIM_UPSIDE_EGREGIOUS_SINGLE;
+  const mediocre = legs >= 2 ? TRIM_UPSIDE_MEDIOCRE : TRIM_UPSIDE_MEDIOCRE_SINGLE;
   // Un gran negocio caro se mantiene sin anadir; solo se recorta si la
   // sobrevaloracion es exagerada. Vender ganadores por un modelo es la forma
   // mas cara de tener razon.
-  if (isFin(upsidePct) && upsidePct <= TRIM_UPSIDE_EGREGIOUS) return "reduce";
-  if (score >= 72 && (upsidePct === null || upsidePct > -10)) return "buy";
+  if (isFin(upsidePct) && upsidePct <= egregious) return "reduce";
+  // Sin valor razonable NO se compra. Antes un upside nulo pasaba el filtro,
+  // asi que una empresa sin valoracion y con buena nota salia como "comprar":
+  // el modelo confundia "no lo se" con "adelante".
+  if (score >= 72 && legs > 0 && isFin(upsidePct) && upsidePct > buyUpsideBar(legs)) return "buy";
   if (score >= 60) return "hold";
-  if (isFin(upsidePct) && upsidePct <= TRIM_UPSIDE_MEDIOCRE) return "reduce";
+  if (isFin(upsidePct) && upsidePct <= mediocre) return "reduce";
   return "hold";
 }
 
@@ -840,7 +983,6 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
       ? present.reduce((s, f) => s + (f.score as number) * f.weight, 0) / presentWeight
       : 0;
   const score = round(composite);
-  const confidence = round(presentWeight / totalWeight, 2);
 
   const fv = fairValue(input);
   const upsidePct =
@@ -851,13 +993,22 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
   const dataQuality: ConvictionResult["dataQuality"] =
     present.length >= 4 ? "full" : present.length >= 2 ? "partial" : "insufficient";
 
+  const confidence = confidenceOf({
+    coverage: presentWeight / totalWeight,
+    legs: fv.legs,
+    peakSeverity: peakCycle(input).severity,
+    edgar: Boolean(input.financials?.available) || input.assetClass !== "equity",
+    earningsOk: earningsReliable(input.fundamentals),
+    epsMismatch: fv.epsMismatch !== null,
+  });
+
   let posture: Posture;
   if (dataQuality === "insufficient") {
     posture = "no_coverage";
   } else if (held) {
-    posture = heldPosture(score, upsidePct);
+    posture = heldPosture(score, upsidePct, fv.legs);
   } else {
-    posture = candidatePosture(score);
+    posture = candidatePosture(score, upsidePct, fv.legs);
   }
 
   const caveats: string[] = [];
@@ -868,10 +1019,22 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
         : "Beneficios TTM posiblemente distorsionados (margen neto > bruto); valor razonable omitido.",
     );
   }
+  if (fv.epsMismatch) {
+    const m = fv.epsMismatch;
+    caveats.push(
+      `Las fuentes no cuadran: el proveedor da un BPA de ${m.ttm} en los ultimos doce meses y el ultimo informe anual declara ${m.annual} (${m.ratio} veces). Una de las dos esta mal y no se cual, asi que no hay valor razonable ni compra: primero hay que arreglar el dato.`,
+    );
+  } else if (fv.legs === 1) {
+    caveats.push(
+      fv.method === "pe"
+        ? "Valor razonable con una sola pata: no hay flujo de caja libre utilizable, asi que sale solo del multiplo de beneficios. Para comprar se exige margen de verdad, no un precio 'justo'."
+        : "Valor razonable con una sola pata: los beneficios no son utilizables, asi que sale solo del descuento de flujos. Para comprar se exige margen de verdad, no un precio 'justo'.",
+    );
+  }
   const peak = peakCycle(input);
   if (peak.flagged) {
     caveats.push(
-      `Posible pico de ciclo: margen ${peak.current}% frente a una mediana historica de ${peak.median}%. El valor razonable asume que ese margen no se sostiene, y recorta la prima de crecimiento un ${Math.round(peak.severity * 100)}%.`,
+      `Posible pico de ciclo: margen ${peak.current}% frente a una mediana historica de ${peak.median}%. El valor razonable no se cree ese margen del todo: normaliza el beneficio un ${Math.round(peak.severity * 100)}% hacia la mediana.`,
     );
   } else if (peak.streak >= STRUCTURAL_STREAK && peak.current !== null && peak.median !== null && peak.current > peak.median) {
     caveats.push(

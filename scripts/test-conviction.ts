@@ -5,13 +5,16 @@
  * Correr con: npm run test:conviction
  */
 import {
+  buyUpsideBar,
   cashConversion,
+  confidenceOf,
   evaluate,
   fairValue,
   fcfPerShare,
   growthEstimate,
   lerp,
   marginTrend,
+  normalizedEps,
   peakCycle,
   rankResults,
   revenueCagr,
@@ -43,6 +46,16 @@ function inRange(v: number | null, lo: number, hi: number, label: string) {
     console.error(`  FALLO ${label}: ${v} no esta en [${lo}, ${hi}]`);
   } else {
     console.log(`  ok  ${label} (${v})`);
+  }
+}
+
+function eqS(actual: unknown, expected: unknown, label: string) {
+  checks++;
+  if (actual !== expected) {
+    failures++;
+    console.error(`  FALLO ${label}: esperado ${String(expected)}, obtenido ${String(actual)}`);
+  } else {
+    console.log(`  ok  ${label}`);
   }
 }
 
@@ -135,7 +148,9 @@ console.log("\n# veredicto: compounder de calidad a precio razonable -> comprar"
       { fy: 2019, revenue: 90, netIncome: 18, netMargin: 20, eps: 3.4, equity: 60, revenueGrowth: 12 },
       { fy: 2020, revenue: 105, netIncome: 22, netMargin: 21, eps: 3.9, equity: 72, revenueGrowth: 16 },
       { fy: 2021, revenue: 122, netIncome: 28, netMargin: 23, eps: 4.6, equity: 88, revenueGrowth: 16 },
-      { fy: 2022, revenue: 140, netIncome: 35, netMargin: 25, eps: 5.2, equity: 110, revenueGrowth: 15 },
+      // Con flujo de caja: asi el valor razonable tiene las DOS patas, que es
+      // el caso normal desde que EDGAR trae bien el capex.
+      { fy: 2022, revenue: 140, netIncome: 35, netMargin: 25, eps: 5.2, equity: 110, revenueGrowth: 15, ocf: 40, capex: 10, fcf: 30, shares: 6.73 },
     ]),
     earnings: [
       { period: "2022-Q4", actual: 1.4, estimate: 1.3, surprisePct: 7.7 },
@@ -146,7 +161,8 @@ console.log("\n# veredicto: compounder de calidad a precio razonable -> comprar"
   inRange(r.score, 64, 100, "score alto");
   truthy(r.posture === "buy" || r.posture === "strong_buy", `postura de compra (${r.posture})`);
   truthy(r.dataQuality === "full", "dataQuality full");
-  inRange(r.confidence, 0.99, 1, "confianza plena (todos los factores)");
+  eqS(r.valuationMethod, "blend", "valor razonable con dos patas");
+  inRange(r.confidence, 0.99, 1, "confianza plena: cobertura total y nada fragil");
   truthy(r.fairValue !== null && r.fairValue > 0, "valor razonable calculado");
   truthy(r.factors.every((f) => f.score !== null), "todos los factores puntuados");
   truthy(r.rationale.length > 10, "rationale no vacio");
@@ -205,7 +221,7 @@ console.log("\n# posicion en cartera, buen negocio pero muy caro -> reducir");
     financials: financials([
       { fy: 2020, revenue: 100, netIncome: 20, netMargin: 20, eps: 1.6, equity: 50, revenueGrowth: 11 },
       { fy: 2021, revenue: 112, netIncome: 24, netMargin: 21, eps: 1.8, equity: 60, revenueGrowth: 12 },
-      { fy: 2022, revenue: 126, netIncome: 28, netMargin: 22, eps: 2.0, equity: 72, revenueGrowth: 12 },
+      { fy: 2022, revenue: 126, netIncome: 28, netMargin: 22, eps: 2.0, equity: 72, revenueGrowth: 12, ocf: 30, capex: 8, fcf: 22, shares: 14 },
     ]),
   };
   const r = evaluate(input);
@@ -215,6 +231,122 @@ console.log("\n# posicion en cartera, buen negocio pero muy caro -> reducir");
     POSTURE_RANK[r.posture] <= POSTURE_RANK.reduce,
     `postura de recorte o venta (${r.posture})`,
   );
+}
+
+console.log("\n# una sola pata: el mismo caro, sin flujo de caja, no se recorta igual");
+{
+  // Identico al anterior pero SIN datos de caja: el valor razonable sale solo
+  // del multiplo. Una estimacion mas fragil no manda vender: se mantiene.
+  const input: ConvictionInput = {
+    symbol: "RICHTHIN", assetClass: "equity", price: 100, riskFreeRate: 4.2,
+    position: { unrealizedPct: 140, weight: 12 },
+    fundamentals: {
+      ...EMPTY_METRICS, marketCap: 800000, pe: 55, ps: 18, pb: 20,
+      revenueGrowthYoy: 12, epsGrowthYoy: 14, operatingMargin: 28, netMargin: 22,
+      roe: 26, debtToEquity: 0.5, currentRatio: 1.6, low52: 60,
+    },
+    financials: financials([
+      { fy: 2020, revenue: 100, netIncome: 20, netMargin: 20, eps: 1.6, equity: 50, revenueGrowth: 11 },
+      { fy: 2021, revenue: 112, netIncome: 24, netMargin: 21, eps: 1.8, equity: 60, revenueGrowth: 12 },
+      { fy: 2022, revenue: 126, netIncome: 28, netMargin: 22, eps: 2.0, equity: 72, revenueGrowth: 12 },
+    ]),
+  };
+  const r = evaluate(input);
+  eqS(r.valuationMethod, "pe", "una sola pata");
+  eqP(r.posture, "hold", "no recorta con un numero fragil (umbral -65 en vez de -45)");
+  truthy(r.confidence < 0.9, `confianza rebajada por fragilidad (${r.confidence})`);
+  truthy(
+    r.caveats.some((c) => c.includes("una sola pata")),
+    "lo dice en voz alta",
+  );
+}
+
+console.log("\n# comprar exige margen cuando el valor tiene una sola pata");
+{
+  eqS(buyUpsideBar(2), -10, "con dos patas se tolera pagar un 10% de mas");
+  eqS(buyUpsideBar(1), 10, "con una sola pata hace falta un 10% a favor");
+  eqS(buyUpsideBar(0), 10, "sin valoracion, la barra no se puede saltar");
+}
+
+console.log("\n# fuentes que se contradicen: el caso NVDA");
+{
+  // Numeros reales de sept 2026: el proveedor daba PER 28,1 con la accion a
+  // $218 (BPA TTM implicito $7,76) mientras el ultimo 10-K declaraba 29.760 M$
+  // entre 24.940 M de acciones = $1,19 por accion. Seis veces y media.
+  const input: ConvictionInput = {
+    symbol: "NVDA", assetClass: "equity", price: 218.05, riskFreeRate: 4.8,
+    position: { unrealizedPct: -4, weight: 8 },
+    fundamentals: {
+      ...EMPTY_METRICS, marketCap: 1090000, pe: 28.1, ps: 17.9, pb: 20.8,
+      revenueGrowthYoy: 83.4, epsGrowthYoy: 125.2, operatingMargin: 65.2, netMargin: 63.7,
+      roe: 110.1, debtToEquity: 0.38, currentRatio: 4.4,
+    },
+    financials: financials([
+      { fy: 2023, revenue: 16675, netIncome: 4332, netMargin: 26, eps: 1.73, equity: 12204, revenueGrowth: 52.7 },
+      { fy: 2024, revenue: 26914, netIncome: 9752, netMargin: 36.2, eps: 3.85, equity: 16893, revenueGrowth: 61.4 },
+      { fy: 2025, revenue: 26974, netIncome: 4368, netMargin: 16.2, eps: 0.17, equity: 26612, revenueGrowth: 0.2 },
+      { fy: 2026, revenue: 60922, netIncome: 29760, netMargin: 48.8, eps: 1.19, equity: 22101, revenueGrowth: 125.8, ocf: 28090, capex: 1069, fcf: 27021, shares: 24940 },
+    ]),
+  };
+  const r = evaluate(input);
+  eqS(r.fairValue, null, "no publica un valor razonable inventado");
+  truthy(r.posture !== "buy" && r.posture !== "strong_buy", `y no dice comprar (${r.posture})`);
+  truthy(r.confidence <= 0.65, `confianza baja, no 100% (${r.confidence})`);
+  truthy(
+    r.caveats.some((c) => c.includes("no cuadran")),
+    "explica que las fuentes se contradicen",
+  );
+
+  // Con el BPA del proveedor coherente con el 10-K, si valora.
+  const ok = evaluate({ ...input, fundamentals: { ...input.fundamentals!, pe: 150 } });
+  truthy(ok.fairValue !== null, "con fuentes coherentes vuelve a haber valor razonable");
+}
+
+console.log("\n# normalizedEps: el pico de ciclo muerde aunque el PER tope");
+{
+  const peak = { flagged: true, severity: 0.5, current: 60, median: 30, streak: 0 };
+  eqS(normalizedEps(10, peak), 7.5, "severidad 0,5 lleva el BPA a medio camino de la mediana");
+  eqS(normalizedEps(10, { ...peak, severity: 1 }), 5, "severidad 1 lo lleva entero a la mediana");
+  eqS(normalizedEps(10, { ...peak, severity: 0 }), 10, "sin severidad no toca nada");
+  eqS(normalizedEps(10, { ...peak, flagged: false, severity: 0.8 }), 10, "sin pico marcado no toca nada");
+  eqS(normalizedEps(10, { ...peak, current: 20, median: 30 }), 10, "margen por debajo de la mediana no se normaliza");
+
+  // El fallo que motivo el cambio: con crecimiento alto el PER se pega al
+  // techo y recortar la prima no cambiaba NADA. Ahora el pico si mueve.
+  const base: ConvictionInput = {
+    symbol: "PEAKY", assetClass: "equity", price: 200, riskFreeRate: 4.8,
+    fundamentals: {
+      ...EMPTY_METRICS, pe: 28, revenueGrowthYoy: 80, epsGrowthYoy: 120, netMargin: 60, grossMargin: 75,
+    },
+    financials: financials([
+      { fy: 2021, revenue: 100, netIncome: 20, netMargin: 20, eps: 2 },
+      { fy: 2022, revenue: 120, netIncome: 30, netMargin: 25, eps: 2.5 },
+      { fy: 2023, revenue: 130, netIncome: 26, netMargin: 20, eps: 2.2 },
+      { fy: 2024, revenue: 200, netIncome: 120, netMargin: 60, eps: 7.1 },
+    ]),
+  };
+  const withPeak = fairValue(base);
+  const noPeak = fairValue({
+    ...base,
+    fundamentals: { ...base.fundamentals!, netMargin: 22 },
+  });
+  truthy(
+    withPeak.value !== null && noPeak.value !== null && withPeak.value < noPeak.value,
+    `el pico rebaja el valor razonable (${withPeak.value} < ${noPeak.value})`,
+  );
+}
+
+console.log("\n# confianza: cobertura menos fragilidad");
+{
+  const full = { coverage: 1, legs: 2 as const, peakSeverity: 0, edgar: true, earningsOk: true, epsMismatch: false };
+  eqS(confidenceOf(full), 1, "todo solido: 1");
+  eqS(confidenceOf({ ...full, legs: 1 }), 0.85, "una sola pata: -0,15");
+  eqS(confidenceOf({ ...full, legs: 0 }), 0.75, "sin valoracion: -0,25");
+  eqS(confidenceOf({ ...full, epsMismatch: true }), 0.65, "fuentes contradictorias: -0,35");
+  eqS(confidenceOf({ ...full, edgar: false }), 0.85, "sin historico EDGAR: -0,15");
+  eqS(confidenceOf({ ...full, peakSeverity: 1 }), 0.9, "pico de ciclo pleno: -0,10");
+  eqS(confidenceOf({ ...full, coverage: 0.6, legs: 1, edgar: false }), 0.3, "los castigos se acumulan");
+  truthy(confidenceOf({ coverage: 0, legs: 0, peakSeverity: 1, edgar: false, earningsOk: false, epsMismatch: true }) >= 0.1, "nunca baja de 0,1");
 }
 
 console.log("\n# fairValue y ranking");
