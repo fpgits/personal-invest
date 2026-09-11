@@ -18,12 +18,15 @@ import {
   Star,
   Users,
   X,
+  Zap,
 } from "lucide-react";
+import { ThemeToggle } from "./theme-toggle";
 import { api, cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/invest", label: "Resumen", icon: LayoutDashboard },
   { href: "/invest/brief", label: "Qué hacer", icon: ListChecks },
+  { href: "/invest/powero", label: "PoWERo", icon: Zap },
   { href: "/invest/cartera", label: "Cartera", icon: Briefcase },
   { href: "/invest/watchlist", label: "Watchlist", icon: Star },
   { href: "/invest/alertas", label: "Alertas", icon: Bell },
@@ -96,13 +99,16 @@ export function Nav() {
 
         <nav className="flex flex-1 flex-col gap-0.5">{items}</nav>
 
-        <button
-          onClick={signOut}
-          className="mt-4 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-faint transition hover:bg-surface hover:text-down"
-        >
-          <LogOut size={16} />
-          Salir
-        </button>
+        <div className="mt-4 flex items-center justify-between gap-2">
+          <button
+            onClick={signOut}
+            className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-faint transition hover:bg-surface hover:text-down"
+          >
+            <LogOut size={16} />
+            Salir
+          </button>
+          <ThemeToggle />
+        </div>
       </aside>
 
       {open && (

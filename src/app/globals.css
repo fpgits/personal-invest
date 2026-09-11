@@ -1,37 +1,88 @@
 @import "tailwindcss";
 
+/**
+ * Dos temas, mismo esqueleto. El claro es el de por defecto: papel, tinta y
+ * lineas de un pixel. Casi no hay color — solo el verde y el rojo de ganar y
+ * perder — porque en una pantalla de cifras el color es informacion, no
+ * decoracion. El oscuro invierte los grises y mantiene esa misma regla.
+ *
+ * Las variables se definen aqui una vez; todo lo demas (bg-bg, text-muted,
+ * border-border...) sale de ellas, asi que cambiar de tema no toca ni un
+ * componente.
+ */
 @theme {
-  --color-bg: #0b0d10;
-  --color-surface: #12151a;
-  --color-surface-2: #181c23;
-  --color-border: #232830;
-  --color-border-strong: #2f3641;
-  --color-text: #e8ecf1;
-  --color-muted: #8b94a3;
-  --color-faint: #5c6473;
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f6f4;
+  --color-border: #e4e4e0;
+  --color-border-strong: #c9c9c3;
+  --color-text: #111111;
+  --color-muted: #6b6b66;
+  --color-faint: #9a9a94;
 
-  --color-up: #26c281;
-  --color-up-dim: #16352a;
-  --color-down: #f4595b;
-  --color-down-dim: #3a1d20;
-  --color-accent: #5b8def;
-  --color-accent-dim: #1a2740;
+  --color-up: #0f8a4d;
+  --color-up-dim: #e8f5ee;
+  --color-down: #d1342f;
+  --color-down-dim: #fbeceb;
+  --color-accent: #111111;
+  --color-accent-dim: #f0f0ed;
+  --color-warn: #a8730a;
+
+  --font-sans: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html[data-theme="dark"] {
+  --color-bg: #0a0a0a;
+  --color-surface: #0a0a0a;
+  --color-surface-2: #151515;
+  --color-border: #262626;
+  --color-border-strong: #3a3a3a;
+  --color-text: #f2f2f0;
+  --color-muted: #969690;
+  --color-faint: #626260;
+
+  --color-up: #3ecf8e;
+  --color-up-dim: #102a1e;
+  --color-down: #ff5f56;
+  --color-down-dim: #2c1412;
+  --color-accent: #f2f2f0;
+  --color-accent-dim: #1c1c1c;
   --color-warn: #e0a13a;
 
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    monospace;
+  color-scheme: dark;
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
   background: var(--color-bg);
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum";
+}
+
+/**
+ * Etiqueta de seccion: minusculas no, cursiva no. Mayusculas pequenas muy
+ * espaciadas, que es lo que hace que una pantalla densa se lea por bloques
+ * en vez de como una sopa de numeros.
+ */
+.label {
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+/** Cifra de titular: enorme, ajustada y tabular. */
+.figure {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+  font-weight: 600;
 }
 
 /* Las cifras se comparan en columna: sin tabulares no se alinean. */

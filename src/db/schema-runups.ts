@@ -39,3 +39,50 @@ export const runupEpisodes = sqliteTable(
 );
 
 export type RunupEpisode = typeof runupEpisodes.$inferSelect;
+
+/**
+ * PoWERo: el registro de ordenes del libro nocional. La cartera NO se guarda,
+ * se deriva de aqui (ver buildBook): una sola version de la verdad.
+ */
+export const poweroOrders = sqliteTable(
+  "powero_orders",
+  {
+    id: text("id").primaryKey(),
+    /** equity | crypto */
+    book: text("book").notNull(),
+    symbol: text("symbol").notNull(),
+    assetId: text("asset_id"),
+    /** buy | sell */
+    side: text("side").notNull(),
+    qty: real("qty").notNull(),
+    price: real("price").notNull(),
+    amount: real("amount").notNull(),
+    /** proposed | executed | discarded */
+    status: text("status").notNull().default("proposed"),
+    reason: text("reason"),
+    source: text("source").notNull(),
+    proposedAt: integer("proposed_at").notNull(),
+    decidedAt: integer("decided_at"),
+  },
+  (t) => [
+    index("powero_orders_book_idx").on(t.book, t.proposedAt),
+    index("powero_orders_status_idx").on(t.status),
+  ],
+);
+
+/** Foto periodica del patrimonio de cada libro: de aqui sale la curva. */
+export const poweroMarks = sqliteTable(
+  "powero_marks",
+  {
+    id: text("id").primaryKey(),
+    book: text("book").notNull(),
+    at: integer("at").notNull(),
+    cash: real("cash").notNull(),
+    positionsValue: real("positions_value").notNull(),
+    equity: real("equity").notNull(),
+  },
+  (t) => [uniqueIndex("powero_marks_key_idx").on(t.book, t.at), index("powero_marks_at_idx").on(t.at)],
+);
+
+export type PoweroOrder = typeof poweroOrders.$inferSelect;
+export type PoweroMark = typeof poweroMarks.$inferSelect;

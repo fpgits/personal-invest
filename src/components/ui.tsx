@@ -14,7 +14,8 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border bg-surface",
+        // Linea de un pixel, sin redondeo ni sombra: rejilla, no tarjetas.
+        "border border-border bg-surface",
         padded && "p-5",
         className,
       )}
@@ -32,8 +33,8 @@ export function CardTitle({
   action?: ReactNode;
 }) {
   return (
-    <div className="mb-4 flex items-center justify-between gap-3">
-      <h2 className="text-sm font-medium text-muted">{children}</h2>
+    <div className="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
+      <h2 className="label">{children}</h2>
       {action}
     </div>
   );

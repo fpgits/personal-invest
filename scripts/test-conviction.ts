@@ -79,6 +79,8 @@ const EMPTY_METRICS: FundamentalMetrics = {
 function financials(rows: Array<Partial<FinancialYear> & { fy: number }>, sharesOut = 1e9): FinancialsView {
   const years: FinancialYear[] = rows.map((r) => ({
     fy: r.fy,
+    // Por defecto, cierre a 31 de diciembre de su ejercicio.
+    end: r.end ?? `${r.fy}-12-31`,
     revenue: r.revenue ?? null,
     netIncome: r.netIncome ?? null,
     netMargin: r.netMargin ?? null,
@@ -268,13 +270,19 @@ console.log("\n# comprar exige margen cuando el valor tiene una sola pata");
   eqS(buyUpsideBar(0), 10, "sin valoracion, la barra no se puede saltar");
 }
 
-console.log("\n# fuentes que se contradicen: el caso NVDA");
+console.log("\n# un anual viejo NO contradice al TTM: el caso NVDA");
 {
-  // Numeros reales de sept 2026: el proveedor daba PER 28,1 con la accion a
-  // $218 (BPA TTM implicito $7,76) mientras el ultimo 10-K declaraba 29.760 M$
-  // entre 24.940 M de acciones = $1,19 por accion. Seis veces y media.
+  // Numeros reales de sept 2026. El proveedor daba PER 28,1 con la accion a
+  // $218 (BPA TTM implicito $7,76) y el ultimo 10-K, cerrado en ENERO,
+  // declaraba $1,19 por accion. Parece una contradiccion de seis veces y no lo
+  // es: entre enero y julio la empresa multiplico beneficios, y sumando los
+  // cuatro trimestres de la SEC salen 192.879 M$ sobre 24.285 M de acciones =
+  // $7,94, un 2% del dato del proveedor. Comparar TTM contra un anual de hace
+  // ocho meses es comparar periodos distintos, y el modelo NO debe callarse
+  // por eso.
   const input: ConvictionInput = {
     symbol: "NVDA", assetClass: "equity", price: 218.05, riskFreeRate: 4.8,
+    now: Date.parse("2026-09-11"),
     position: { unrealizedPct: -4, weight: 8 },
     fundamentals: {
       ...EMPTY_METRICS, marketCap: 1090000, pe: 28.1, ps: 17.9, pb: 20.8,
@@ -285,21 +293,29 @@ console.log("\n# fuentes que se contradicen: el caso NVDA");
       { fy: 2023, revenue: 16675, netIncome: 4332, netMargin: 26, eps: 1.73, equity: 12204, revenueGrowth: 52.7 },
       { fy: 2024, revenue: 26914, netIncome: 9752, netMargin: 36.2, eps: 3.85, equity: 16893, revenueGrowth: 61.4 },
       { fy: 2025, revenue: 26974, netIncome: 4368, netMargin: 16.2, eps: 0.17, equity: 26612, revenueGrowth: 0.2 },
-      { fy: 2026, revenue: 60922, netIncome: 29760, netMargin: 48.8, eps: 1.19, equity: 22101, revenueGrowth: 125.8, ocf: 28090, capex: 1069, fcf: 27021, shares: 24940 },
+      { fy: 2026, end: "2026-01-25", revenue: 60922, netIncome: 29760, netMargin: 48.8, eps: 1.19, equity: 22101, revenueGrowth: 125.8, ocf: 28090, capex: 1069, fcf: 27021, shares: 24940 },
     ]),
   };
   const r = evaluate(input);
-  eqS(r.fairValue, null, "no publica un valor razonable inventado");
-  truthy(r.posture !== "buy" && r.posture !== "strong_buy", `y no dice comprar (${r.posture})`);
-  truthy(r.confidence <= 0.65, `confianza baja, no 100% (${r.confidence})`);
-  truthy(
-    r.caveats.some((c) => c.includes("no cuadran")),
-    "explica que las fuentes se contradicen",
-  );
+  truthy(r.fairValue !== null, "el anual cerro hace 8 meses: no se suprime la valoracion");
+  truthy(!r.caveats.some((c) => c.includes("no cuadran")), "no acusa a las fuentes de contradecirse");
 
-  // Con el BPA del proveedor coherente con el 10-K, si valora.
-  const ok = evaluate({ ...input, fundamentals: { ...input.fundamentals!, pe: 150 } });
-  truthy(ok.fairValue !== null, "con fuentes coherentes vuelve a haber valor razonable");
+  // Pero si el ejercicio acaba de cerrar y aun asi el TTM lo multiplica por
+  // seis, entonces si hay algo roto y el modelo se calla.
+  const reciente = evaluate({
+    ...input,
+    now: Date.parse("2026-03-01"),
+    financials: financials([
+      { fy: 2025, end: "2025-01-26", revenue: 26974, netIncome: 4368, netMargin: 16.2, eps: 0.17, equity: 26612 },
+      { fy: 2026, end: "2026-01-25", revenue: 60922, netIncome: 29760, netMargin: 48.8, eps: 1.19, equity: 22101, ocf: 28090, capex: 1069, fcf: 27021, shares: 24940 },
+    ]),
+  });
+  eqS(reciente.fairValue, null, "anual recien cerrado y BPA 6,5x: no publica valoracion");
+  truthy(
+    reciente.caveats.some((c) => c.includes("no cuadran")),
+    "y explica que las fuentes se contradicen",
+  );
+  truthy(reciente.confidence <= 0.65, `confianza baja en ese caso (${reciente.confidence})`);
 }
 
 console.log("\n# normalizedEps: el pico de ciclo muerde aunque el PER tope");

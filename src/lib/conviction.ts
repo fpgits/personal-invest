@@ -72,6 +72,8 @@ export type ConvictionInput = {
    * (sobrevaloracion / deterioro). Ausente = candidato/oportunidad.
    */
   position?: { unrealizedPct: number; weight: number } | null;
+  /** Reloj inyectable: decide si un ejercicio cerrado sigue siendo comparable. */
+  now?: number;
 };
 
 export type ConvictionResult = {
@@ -650,23 +652,42 @@ export const PE_CEIL = 35;
 export const EPS_COHERENCE_RATIO = 3;
 
 /**
- * Las dos fuentes tienen que contar la misma historia. El BPA TTM viene del
- * proveedor de mercado (Finnhub) y el anual del 10-K de la SEC: si difieren
- * por un multiplo, una de las dos esta mal y NO sabemos cual. Publicar un
- * valor razonable en ese caso es inventarse una precision que no existe.
- *
- * Caso real que lo motivo (NVDA, sept 2026): el proveedor daba un PER de 28
- * sobre un BPA TTM de $7,76, mientras el ultimo 10-K declaraba $1,19 por
- * accion (29.760 M$ entre 24.940 M de acciones). El valor razonable salia de
- * multiplicar por 35 el BPA del proveedor: $271,74, o sea un numero que
- * ninguna cuenta presentada a la SEC respalda.
- *
- * Solo compara cuando ambos son positivos: salir de perdidas multiplica el
- * BPA por lo que sea y eso no es incoherencia, es un ano malo que pasa.
+ * Ventana en la que un ejercicio cerrado sigue siendo comparable con los
+ * ultimos doce meses. Pasado eso, los dos numeros hablan de periodos
+ * distintos y su diferencia no prueba nada.
  */
-export function epsCoherent(epsTtm: number | null, financials: FinancialsView | null): boolean {
-  const annual = financials?.years.at(-1)?.eps ?? null;
+export const ANNUAL_COMPARABLE_DAYS = 180;
+
+/**
+ * Las dos fuentes tienen que contar la misma historia: el BPA TTM del
+ * proveedor de mercado y el del ultimo ejercicio presentado a la SEC. Si se
+ * contradicen, una esta mal y no sabemos cual, asi que no se publica valor
+ * razonable.
+ *
+ * CUIDADO con lo que se compara. La primera version de esta funcion medía el
+ * TTM contra el ultimo anual sin mirar la FECHA de ese anual, y eso es
+ * comparar peras con manzanas: el ejercicio de NVDA cerro en enero y para
+ * septiembre la empresa habia multiplicado sus beneficios, asi que el TTM
+ * legitimamente valia seis veces el anual. Con esa regla el modelo se callaba
+ * justo en las empresas que mas rapido crecen — dato bueno, veredicto
+ * suprimido. Comprobado despues contra los informes trimestrales de la SEC:
+ * el BPA del proveedor cuadraba dentro de un 2% en NVDA, AMZN, MSFT, NFLX,
+ * IBM, STX y KVYO. El fallo era de la comparacion, no de los datos.
+ *
+ * Por eso ahora solo compara cuando el ejercicio cerro hace poco
+ * (ANNUAL_COMPARABLE_DAYS) y ambos son positivos: salir de perdidas multiplica
+ * el BPA por lo que sea, y eso no es incoherencia sino un ano malo que pasa.
+ */
+export function epsCoherent(
+  epsTtm: number | null,
+  financials: FinancialsView | null,
+  now = Date.now(),
+): boolean {
+  const last = financials?.years.at(-1) ?? null;
+  const annual = last?.eps ?? null;
   if (!isFin(epsTtm) || epsTtm <= 0 || !isFin(annual) || annual <= 0) return true;
+  const end = last?.end ? Date.parse(last.end) : NaN;
+  if (!Number.isFinite(end) || now - end > ANNUAL_COMPARABLE_DAYS * 86400_000) return true;
   const ratio = epsTtm / annual;
   return ratio <= EPS_COHERENCE_RATIO && ratio >= 1 / EPS_COHERENCE_RATIO;
 }
@@ -726,7 +747,7 @@ export function fairValue(input: ConvictionInput): FairValueDetail {
   // sale del mismo proveedor: si su BPA no es de fiar, su crecimiento tampoco.
   const peRatio = input.fundamentals?.pe ?? null;
   const epsProbe = isFin(peRatio) && peRatio > 0 ? price / peRatio : null;
-  if (!epsCoherent(epsProbe, input.financials ?? null)) {
+  if (!epsCoherent(epsProbe, input.financials ?? null, input.now ?? Date.now())) {
     const annual = input.financials?.years.at(-1)?.eps as number;
     return {
       ...NO_FAIR,

@@ -108,6 +108,8 @@ async function annualMerged(
 
 export type FinancialYear = {
   fy: number;
+  /** Fecha de cierre del ejercicio (YYYY-MM-DD), para saber si sigue vigente. */
+  end: string | null;
   revenue: number | null;
   netIncome: number | null;
   /** beneficio neto / ingresos, en %. */
@@ -191,6 +193,12 @@ export function buildFinancials(
   const cash = map(input.cash);
   const shares = map(input.shares);
 
+  // Fecha de cierre de cada ejercicio. Sin ella no se puede saber si un dato
+  // anual sigue siendo comparable con los ultimos doce meses o si ya se quedo
+  // atras: un anual cerrado hace ocho meses no dice nada del trimestre pasado.
+  const endOf = new Map<number, string>();
+  for (const p of [...(input.netIncome ?? []), ...(input.revenue ?? [])]) endOf.set(p.fy, p.end);
+
   const fys = [...new Set([...rev.keys(), ...ni.keys(), ...eps.keys(), ...eq.keys(), ...ocf.keys()])].sort(
     (a, b) => a - b,
   );
@@ -208,6 +216,7 @@ export function buildFinancials(
     const k = cash.get(fy) ?? null;
     return {
       fy,
+      end: endOf.get(fy) ?? null,
       revenue,
       netIncome,
       netMargin: revenue && netIncome !== null && revenue !== 0 ? round((netIncome / revenue) * 100, 1) : null,
