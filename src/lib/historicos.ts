@@ -25,6 +25,8 @@ import { id } from "./utils";
  */
 
 export const EQUITY_HISTORY_FROM = "2010-01-01";
+/** Cierres minimos para que buscar episodios tenga sentido (~10 meses). */
+export const MIN_HISTORY_DAYS = 200;
 
 export type EpisodeWithContext = Episode & {
   symbol: string;
@@ -37,7 +39,9 @@ export type EpisodeWithContext = Episode & {
 export async function priceHistoryFor(symbol: string, assetClass: string, today = new Date()): Promise<DailyClose[]> {
   if (assetClass === "crypto") return datedCloses(symbol);
   const to = today.toISOString().slice(0, 10);
-  return dailyCloses(symbol, EQUITY_HISTORY_FROM, to).catch(() => []);
+  // Sin .catch: si Stooq falla hay que enterarse. Tragarse el error dejaba la
+  // tabla de Bolsa vacia sin decir por que.
+  return dailyCloses(symbol, EQUITY_HISTORY_FROM, to);
 }
 
 /** Estado de ciclo con los cierres hasta la fecha (sin mirar después). Puro. */
@@ -77,7 +81,9 @@ async function signalsKnownAt(symbol: string, date: string): Promise<FilingSigna
  */
 export async function scanSymbol(asset: Asset, today = new Date()): Promise<EpisodeWithContext[]> {
   const series = await priceHistoryFor(asset.symbol, asset.assetClass, today);
-  if (series.length < 200) return [];
+  if (series.length < MIN_HISTORY_DAYS) {
+    throw new Error(`sin histórico suficiente (${series.length} cierres, hacen falta ${MIN_HISTORY_DAYS})`);
+  }
   const episodes = findEpisodes(series);
   if (episodes.length === 0) return [];
 
@@ -162,6 +168,8 @@ export async function listEpisodes(limit = 200): Promise<RunupEpisode[]> {
 /** Lo que había en común seis meses antes, en una tabla compacta. Puro. */
 export type EpisodeRow = {
   symbol: string;
+  /** equity | crypto. Es lo que decide en qué tabla va la fila. */
+  assetClass: string;
   kind: string;
   anchorDate: string;
   gainPct: number;
@@ -196,6 +204,7 @@ export function episodeRows(list: RunupEpisode[]): EpisodeRow[] {
     const isCrypto = r.assetClass === "crypto";
     return {
       symbol: r.symbol,
+      assetClass: r.assetClass,
       kind: r.kind,
       anchorDate: r.anchorDate,
       gainPct: r.gainPct,

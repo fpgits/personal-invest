@@ -44,6 +44,15 @@ export async function dailyCloses(symbol: string, from: string, to: string): Pro
   });
   if (!res.ok) throw new Error(`Stooq respondio HTTP ${res.status} para ${symbol}`);
   const text = await res.text();
-  if (/no data|exceeded/i.test(text.slice(0, 200))) return [];
-  return parseStooqCsv(text);
+  if (/no data/i.test(text.slice(0, 200))) return [];
+  const rows = parseStooqCsv(text);
+  // Stooq contesta 200 con una linea de texto plano cuando corta el grifo
+  // ("Access denied", "Exceeded the daily hits limit"). Devolver [] ahi era
+  // mentir: el activo quedaba como "sin historico" y el fallo no aparecia en
+  // ningun sitio. Un cuerpo corto que no parsea a ninguna fila es un rechazo,
+  // y se levanta como error para que quien llame pueda contarlo.
+  if (rows.length === 0 && text.trim().length < 200) {
+    throw new Error(`Stooq no dio datos para ${symbol}: "${text.trim().slice(0, 80)}"`);
+  }
+  return rows;
 }

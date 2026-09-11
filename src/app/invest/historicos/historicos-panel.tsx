@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { RefreshCw } from "lucide-react";
 import { Badge, Card, CardTitle } from "@/components/ui";
-import type { EpisodeRow } from "@/lib/historicos";
+import type { EpisodeRow, ScanResult } from "@/lib/historicos";
 import { api, cn } from "@/lib/utils";
 
 type Payload = { rows: EpisodeRow[]; asOf: number };
@@ -42,18 +42,23 @@ export function HistoricosPanel() {
   });
   const [busy, setBusy] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [failed, setFailed] = useState<ScanResult[]>([]);
 
   async function rescan() {
     setBusy(true);
     setScanError(null);
+    setFailed([]);
     try {
       const res = await fetch(api("/api/historicos"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; results?: ScanResult[] };
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      // Los fallos por símbolo no revientan la pasada, pero tienen que verse:
+      // una tabla vacía sin explicación parece que no hubo nada que encontrar.
+      setFailed((body.results ?? []).filter((r) => r.error));
       await mutate();
     } catch (e) {
       setScanError((e as Error).message);
@@ -63,8 +68,13 @@ export function HistoricosPanel() {
   }
 
   const rows = data?.rows ?? [];
-  const equities = rows.filter((r) => r.cycleDrawdownPct === null);
-  const cryptos = rows.filter((r) => r.cycleDrawdownPct !== null);
+  // Se reparte por la CLASE del activo, no por si hay foto. Antes se miraba
+  // cycleDrawdownPct !== null y los primeros episodios de cada cripto (los que
+  // no tienen seis meses de precio antes, asi que se quedan sin foto) caian en
+  // la tabla de Bolsa: BNB y ETH de 2017 aparecian como acciones.
+  const equities = rows.filter((r) => r.assetClass !== "crypto");
+  const cryptos = rows.filter((r) => r.assetClass === "crypto");
+  const cryptoNoSnapshot = cryptos.filter((r) => r.cycleDrawdownPct === null).length;
 
   return (
     <div className="space-y-4">
@@ -92,6 +102,21 @@ export function HistoricosPanel() {
         {isLoading && <p className="mt-3 text-sm text-muted">Cargando…</p>}
         {error && <p className="mt-3 text-sm text-down">{(error as Error).message}</p>}
         {scanError && <p className="mt-3 text-sm text-down">{scanError}</p>}
+        {failed.length > 0 && (
+          <div className="mt-3 rounded-lg border border-border bg-surface-2 px-3 py-2">
+            <p className="text-xs font-medium text-warn">
+              {failed.length} {failed.length === 1 ? "activo se quedó" : "activos se quedaron"} sin recorrer
+            </p>
+            <ul className="mt-1 space-y-0.5 text-xs text-faint">
+              {failed.slice(0, 8).map((f) => (
+                <li key={f.symbol}>
+                  <b className="text-muted">{f.symbol}</b> · {f.error}
+                </li>
+              ))}
+              {failed.length > 8 && <li>y {failed.length - 8} más</li>}
+            </ul>
+          </div>
+        )}
         {data && rows.length === 0 && (
           <p className="mt-3 text-sm text-faint">
             Todavía no hay episodios. Pulsa Recalcular: recorre los activos seguidos (tarda unos minutos:
@@ -167,6 +192,12 @@ export function HistoricosPanel() {
               la escalera. Aquí se ve si los saltos vinieron tras caídas profundas y mínimos que ya habían
               parado.
             </p>
+            {cryptoNoSnapshot > 0 && (
+              <p className="mt-1 text-xs text-faint">
+                {cryptoNoSnapshot} sin foto: son los primeros episodios de cada moneda, cuando todavía no
+                había seis meses de precio antes. Cuentan como episodio, pero no enseñan nada.
+              </p>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
