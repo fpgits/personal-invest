@@ -139,7 +139,7 @@ function DraftPreview({
         <Conviction value={conviction} onChange={setConviction} />
         <button
           onClick={() => onSave(conviction)}
-          className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-bg transition hover:opacity-90"
         >
           Guardar tesis
         </button>
@@ -395,7 +395,7 @@ function Proposal({
         </ul>
       )}
       <div className="mt-3 flex gap-2">
-        <button onClick={() => onResolve(true)} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90">
+        <button onClick={() => onResolve(true)} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90">
           <Check size={12} /> Aceptar
         </button>
         <button onClick={() => onResolve(false)} className="flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition hover:text-text">

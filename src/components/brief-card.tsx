@@ -19,12 +19,12 @@ const fetcher = async (url: string) => {
 
 /** Verbo y color por acción. */
 const ACTION: Record<BriefAction, { label: string; cls: string }> = {
-  comprar: { label: "Compra", cls: "bg-up text-white" },
-  apuesta: { label: "Apuesta", cls: "bg-accent text-white" },
-  vender: { label: "Vende", cls: "bg-down text-white" },
-  reducir: { label: "Reduce", cls: "bg-warn text-white" },
-  revisar: { label: "Revisa", cls: "bg-warn text-white" },
-  buena_senal: { label: "Buena señal", cls: "bg-up text-white" },
+  comprar: { label: "Compra", cls: "bg-up text-bg" },
+  apuesta: { label: "Apuesta", cls: "bg-accent text-bg" },
+  vender: { label: "Vende", cls: "bg-down text-bg" },
+  reducir: { label: "Reduce", cls: "bg-warn text-bg" },
+  revisar: { label: "Revisa", cls: "bg-warn text-bg" },
+  buena_senal: { label: "Buena señal", cls: "bg-up text-bg" },
   esperar: { label: "Espera", cls: "bg-surface-2 text-muted border border-border" },
   vigilar: { label: "Vigila", cls: "bg-surface-2 text-muted border border-border" },
 };
@@ -89,7 +89,7 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
           </div>
           <Link
             href="/invest/brief"
-            className="flex shrink-0 items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:opacity-90"
+            className="flex shrink-0 items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-bg transition hover:opacity-90"
           >
             Ver el plan
             <ArrowRight size={14} />
@@ -147,7 +147,7 @@ export function BriefCard({ compact = false }: { compact?: boolean }) {
           <ul className="mt-3 divide-y divide-border border-t border-border">
             {month.equity.lines.map((l) => (
               <li key={l.symbol} className="flex items-start gap-3 px-2 py-2">
-                <span className="mt-0.5 shrink-0 rounded-md bg-up px-2 py-0.5 text-xs font-semibold text-white">Compra</span>
+                <span className="mt-0.5 shrink-0 rounded-md bg-up px-2 py-0.5 text-xs font-semibold text-bg">Compra</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
                     {l.symbol} <span className="tnum">{money(l.amount, data.currency)}</span>

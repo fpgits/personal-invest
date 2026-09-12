@@ -88,7 +88,7 @@ export function GroupPicker({ className }: { className?: string }) {
             onClick={() => setGroup(g)}
             className={cn(
               "rounded-md px-2.5 py-1.5 text-sm font-medium transition whitespace-nowrap",
-              active ? "bg-accent text-white" : "text-muted hover:bg-surface-2 hover:text-text",
+              active ? "bg-accent text-bg" : "text-muted hover:bg-surface-2 hover:text-text",
             )}
           >
             {GROUP_LABELS[g]}

@@ -194,7 +194,7 @@ export default function AjustesPage() {
       <button
         onClick={save}
         disabled={busy}
-        className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+        className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
       >
         {saved && <Check size={15} />}
         {busy ? "Guardando..." : saved ? "Guardado" : "Guardar ajustes"}

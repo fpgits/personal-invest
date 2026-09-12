@@ -222,7 +222,7 @@ export default function ManagersPage() {
           <button
             type="submit"
             disabled={searching || adding !== null || query.trim().length < 2}
-            className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+            className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
           >
             {searching ? "Buscando..." : adding ? "Anadiendo..." : /^\d+$/.test(query.trim()) ? "Anadir" : "Buscar"}
           </button>

@@ -25,7 +25,7 @@ export default function VaultHome() {
     <main className="mx-auto max-w-4xl px-5 py-12 md:py-16">
       <header className="mb-10 flex items-end justify-between gap-4">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
+          <p className="text-[11px] uppercase tracking-[0.16em] text-faint">
             Pagina personal
           </p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">

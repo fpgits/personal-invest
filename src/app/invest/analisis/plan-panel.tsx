@@ -120,7 +120,7 @@ export function PlanCard({ onSaved }: { onSaved?: () => void }) {
         <button
           onClick={() => run(false)}
           disabled={busy !== null}
-          className="flex items-center justify-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+          className="flex items-center justify-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
         >
           <Sparkles size={14} />
           {busy === "run" ? "Calculando..." : "Generar plan"}

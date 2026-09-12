@@ -442,7 +442,7 @@ function CalibrationCard() {
         <button
           onClick={() => act("suggest")}
           disabled={busy || !data.suggestion}
-          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
         >
           Aplicar pesos sugeridos
         </button>

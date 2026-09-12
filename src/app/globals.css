@@ -20,22 +20,30 @@
   --color-muted: #6b6b66;
   --color-faint: #9a9a94;
 
-  --color-up: #0f8a4d;
+  --color-up: #0f874b;
   --color-up-dim: #e8f5ee;
   --color-down: #d1342f;
   --color-down-dim: #fbeceb;
   --color-accent: #111111;
   --color-accent-dim: #f0f0ed;
-  --color-warn: #a8730a;
+  --color-warn: #9e6c09;
 
-  --font-sans: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  /**
+   * La humanista es la letra de TODA la app. Antes lo era la monoespaciada, y
+   * era un error: en una pantalla que ademas de cifras tiene titulos,
+   * etiquetas y frases enteras, la mono cansa y se lee peor. La puerta de
+   * entrada ya usaba esta y es la que funciona; ahora manda en todas partes.
+   *
+   * Las cifras no pierden nada por el cambio: se alinean en columna con
+   * `tabular-nums` (.tnum / .figure), que es lo que de verdad las alinea. Ser
+   * monoespaciada nunca fue el requisito.
+   */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  /** Mono de verdad, solo donde el caracter importa: claves, IDs, modelos. */
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  /**
-   * Para las pantallas que no son una rejilla de cifras (la puerta de entrada,
-   * textos largos): ahi la monoespaciada cansa y una humanista respira.
-   */
+  /** Mismo stack que --font-sans. Se conserva porque el login lo pide por nombre. */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
     "Helvetica Neue", Arial, sans-serif;
 

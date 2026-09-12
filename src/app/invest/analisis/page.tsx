@@ -213,7 +213,7 @@ function Chat() {
           type="submit"
           disabled={streaming || !input.trim()}
           aria-label="Enviar"
-          className="rounded-lg bg-accent px-3.5 text-white transition hover:opacity-90 disabled:opacity-40"
+          className="rounded-lg bg-accent px-3.5 text-bg transition hover:opacity-90 disabled:opacity-40"
         >
           <Send size={15} />
         </button>
@@ -249,7 +249,7 @@ function RiskPanel() {
       <button
         onClick={run}
         disabled={busy}
-        className="mt-4 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+        className="mt-4 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
       >
         {busy ? "Analizando..." : "Analizar riesgo"}
       </button>

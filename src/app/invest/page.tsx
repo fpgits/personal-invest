@@ -40,7 +40,7 @@ export default async function DashboardPage() {
           action={
             <Link
               href="/invest/cuentas"
-              className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-white transition hover:opacity-90"
+              className="rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-bg transition hover:opacity-90"
             >
               Conectar una cuenta
             </Link>

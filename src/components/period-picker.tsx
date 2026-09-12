@@ -302,7 +302,7 @@ function RangePanel({
               type="button"
               disabled={!canApply}
               onClick={() => from && to && onCustom(from, to)}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
             >
               Aplicar
             </button>
@@ -391,7 +391,7 @@ function ComparisonPanel({
                 type="button"
                 disabled={!cmpFrom}
                 onClick={() => cmpFrom && onCustom(cmpFrom)}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:opacity-90 disabled:opacity-40"
               >
                 Aplicar
               </button>
@@ -470,7 +470,7 @@ function Month({
                 "tnum h-8 text-sm transition",
                 disabled ? "text-faint/50" : "hover:bg-surface-2",
                 inRange && "bg-surface-2",
-                (isFrom || isTo) && "bg-accent text-white hover:bg-accent",
+                (isFrom || isTo) && "bg-accent text-bg hover:bg-accent",
                 isFrom && "rounded-l-md",
                 isTo && "rounded-r-md",
                 isFrom && isTo && "rounded-md",
