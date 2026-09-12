@@ -17,6 +17,7 @@ import {
   type Order,
   type Signal,
 } from "../src/lib/powero";
+import { due, MARK_MIN_GAP_MS, PROPOSE_MIN_GAP_MS } from "../src/lib/powero-tick";
 
 let failures = 0;
 let checks = 0;
@@ -278,6 +279,36 @@ console.log("\n# el libro nunca se queda en negativo");
     maxLinea <= (mark.equity * MAX_SYMBOL_PCT) / 100 + 0.5,
     `ningun simbolo pasa del ${MAX_SYMBOL_PCT}% (mayor: $${maxLinea})`,
   );
+}
+
+// --- El reloj: topes para que colgarse de varios crons no duplique trabajo ---
+{
+  const ahora = 1_000_000_000_000;
+  truthy(due(null, MARK_MIN_GAP_MS, ahora), "sin marca previa, siempre toca");
+  truthy(due(NaN, MARK_MIN_GAP_MS, ahora), "una marca ilegible se trata como inexistente");
+  truthy(
+    !due(ahora - 10 * 60_000, MARK_MIN_GAP_MS, ahora),
+    "no se vuelve a valorar diez minutos despues",
+  );
+  truthy(
+    due(ahora - 60 * 60_000, MARK_MIN_GAP_MS, ahora),
+    "una hora despues si se valora otra vez",
+  );
+  truthy(
+    due(ahora - MARK_MIN_GAP_MS, MARK_MIN_GAP_MS, ahora),
+    "justo en el tope ya toca (limite inclusivo)",
+  );
+  // Lo que de verdad importa: las dos pasadas diarias del cron de foto y del
+  // cron dedicado no pueden proponer las dos.
+  truthy(
+    !due(ahora - 8 * 3_600_000, PROPOSE_MIN_GAP_MS, ahora),
+    "propuesto hace ocho horas: no se propone otra vez el mismo dia",
+  );
+  truthy(
+    due(ahora - 24 * 3_600_000, PROPOSE_MIN_GAP_MS, ahora),
+    "al dia siguiente si se vuelve a proponer",
+  );
+  truthy(PROPOSE_MIN_GAP_MS > MARK_MIN_GAP_MS, "se valora mas a menudo de lo que se propone");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);

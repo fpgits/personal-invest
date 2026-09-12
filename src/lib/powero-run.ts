@@ -4,6 +4,7 @@ import { assets } from "@/db/schema";
 import { poweroMarks, poweroOrders, type PoweroOrder } from "@/db/schema-runups";
 import { cachedMonthlyPlan } from "./conviction-run";
 import { getCachedQuotes } from "./market";
+import { datedCloses } from "./market/crypto-history";
 import {
   buildBook,
   markBook,
@@ -169,6 +170,10 @@ export async function proposeNow(now = Date.now()): Promise<Order[]> {
     });
     created.push(...props);
   }
+  // Queda apuntado que el oraculo YA corrio, aunque no saliera nada. Sin esta
+  // marca el reloj no sabria distinguir "hoy no habia nada que hacer" de "hoy
+  // todavia no he mirado", y volveria a correrlo entero en cada pasada.
+  await setSetting(POWERO_KEYS.lastProposeAt, String(now)).catch(() => undefined);
   if (created.length === 0) return [];
 
   const bySymbol = new Map(
@@ -226,10 +231,26 @@ export const benchBook = (book: Book) => `bench_${book}`;
  * Se compra UNA vez: la primera valoracion fija cuantas participaciones se
  * habrian comprado con el capital inicial, y a partir de ahi solo se revalora.
  */
+/**
+ * Precio del indice. Ojo con lo evidente: el indice NO tiene por que estar en
+ * tu cartera — BTC no lo esta — y `pricesFor` solo sabe de activos tuyos. Si
+ * no aparece por ahi, para cripto se pide el ultimo cierre directamente. Sin
+ * esto la linea de comparacion de cripto no existiria y la curva de PoWERo se
+ * quedaria sin contra quien medirse, que es justo lo que la hace util.
+ */
+async function benchmarkPrice(book: Book, symbol: string): Promise<number | null> {
+  const prices = await pricesFor([symbol]).catch(() => ({}) as Record<string, number | null>);
+  const own = prices[symbol] ?? null;
+  if (own !== null && own > 0) return own;
+  if (book !== "crypto") return null;
+  const closes = await datedCloses(symbol, 3).catch(() => []);
+  const last = closes.at(-1)?.close ?? null;
+  return last !== null && Number.isFinite(last) && last > 0 ? last : null;
+}
+
 async function markBenchmark(book: Book, capital: number, now: number): Promise<number | null> {
   const symbol = BENCHMARK[book];
-  const prices = await pricesFor([symbol]).catch(() => ({}) as Record<string, number | null>);
-  const price = prices[symbol] ?? null;
+  const price = await benchmarkPrice(book, symbol);
   if (price === null || price <= 0) return null;
 
   const key = book === "equity" ? POWERO_KEYS.benchUnitsEquity : POWERO_KEYS.benchUnitsCrypto;

@@ -18,6 +18,12 @@ export const POWERO_KEYS = {
    */
   benchUnitsEquity: "powero_bench_units_equity",
   benchUnitsCrypto: "powero_bench_units_crypto",
+  /**
+   * Cuando corrio el oraculo por ultima vez para PoWERo. No es un ajuste que
+   * toques tu: es lo que impide que el reloj proponga dos veces el mismo dia
+   * cuando cuelga de varios crons a la vez.
+   */
+  lastProposeAt: "powero_last_propose_at",
 } as const;
 
 /** Contra que se mide cada libro. */
