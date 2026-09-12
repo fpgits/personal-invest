@@ -40,7 +40,9 @@ export async function GET(req: Request) {
     return Response.json({
       mode: settings.mode,
       proposed: tick.proposed,
-      recorded: settings.mode === "auto" ? tick.proposed : 0,
+      executed: settings.mode === "auto" ? tick.proposed : 0,
+      /** El veredicto del dia, guardado como llamada medible. */
+      callsRecorded: tick.recorded,
       marked: tick.marked,
       skipped: tick.skipped,
       asOf: Date.now(),

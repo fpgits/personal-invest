@@ -36,7 +36,13 @@ export const POST = protectedRoute(async (req) => {
 
   if (body.action === "propose") {
     const created = await proposeNow();
-    return Response.json({ created, asOf: Date.now() });
+    // Y se valora acto seguido, igual que hace el cron. Proponer sin valorar
+    // deja el libro con operaciones y sin un solo punto de curva: fue
+    // exactamente lo que paso el primer dia (2 ordenes, 0 marcas). La curva
+    // tiene que empezar en el momento de la primera operacion, no en la
+    // siguiente pasada del reloj.
+    const equity = await markNow().catch(() => null);
+    return Response.json({ created, equity, asOf: Date.now() });
   }
   if (body.action === "mark") {
     return Response.json({ equity: await markNow(), asOf: Date.now() });

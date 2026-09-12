@@ -251,12 +251,20 @@ export async function runMonthlyPlan(opts: {
 const PLAN_TTL_MS = 30 * 60_000;
 let planMemo: { at: number; value: MonthlyPlan } | null = null;
 
+/**
+ * `save` deja el plan registrado en `conviction_calls`, que es el marcador del
+ * oraculo: sin esas filas, `markForwardReturns` no tiene nada que marcar y no
+ * se puede responder nunca si el motor acierta. Lo pide el reloj diario una
+ * vez al dia; los demas (el chat, "Que hacer") leen y no guardan, para no
+ * llenar el marcador de la misma llamada repetida cada vez que abres una
+ * pantalla. Guardar no cuesta una corrida extra: es la misma que ya se hizo.
+ */
 export async function cachedMonthlyPlan(
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; save?: boolean } = {},
   now = Date.now(),
 ): Promise<MonthlyPlan> {
   if (!opts.force && planMemo && now - planMemo.at < PLAN_TTL_MS) return planMemo.value;
-  const value = await runMonthlyPlan({ save: false });
+  const value = await runMonthlyPlan({ save: opts.save === true });
   planMemo = { at: now, value };
   return value;
 }

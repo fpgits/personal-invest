@@ -4,7 +4,7 @@ import { assets } from "@/db/schema";
 import { poweroMarks, poweroOrders, type PoweroOrder } from "@/db/schema-runups";
 import { cachedMonthlyPlan } from "./conviction-run";
 import { getCachedQuotes } from "./market";
-import { datedCloses } from "./market/crypto-history";
+import { dailyCloses, datedCloses } from "./market/crypto-history";
 import {
   buildBook,
   markBook,
@@ -53,8 +53,38 @@ export async function listOrders(limit = 200): Promise<Order[]> {
   return rows.map(toOrder);
 }
 
-/** Precios de ahora para los simbolos que hagan falta. Mejor esfuerzo. */
-async function pricesFor(symbols: string[]): Promise<Record<string, number | null>> {
+/**
+ * Ultimo cierre de una cripto que no esta en `assets`. Dos intentos: primero
+ * el barato (una peticion de velas), y si esa fuente no responde, el historico
+ * largo — el MISMO que ya usa la escalera de ciclo, memoizado, asi que dentro
+ * de una corrida del oraculo suele salir gratis y trae ademas la reserva de
+ * CoinGecko cuando Binance no contesta.
+ */
+async function lastCryptoClose(symbol: string): Promise<number | null> {
+  const ok = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+  const dated = await datedCloses(symbol, 3).catch(() => []);
+  const quick = ok(dated.at(-1)?.close);
+  if (quick !== null) return quick;
+  const history = await dailyCloses(symbol).catch(() => null);
+  return ok(history?.closes.at(-1));
+}
+
+/**
+ * Precios de ahora para los simbolos que hagan falta. Mejor esfuerzo.
+ *
+ * Ojo con lo que no es evidente: `assets` son TUS activos, y PoWERo puede
+ * perfectamente tener en el libro algo que tu no tienes — la escalera compro
+ * BTC el primer dia, y BTC no esta en tu cartera. Sin la reserva de abajo, ese
+ * simbolo se queda sin precio y `markBook` lo valora a coste: la linea no se
+ * movería nunca y el libro mentiría en silencio, que es peor que fallar.
+ *
+ * `cryptoSymbols` dice cuales pueden pedirse al historico de cripto; para una
+ * accion que no este en `assets` no hay reserva y se queda en null, visible.
+ */
+async function pricesFor(
+  symbols: string[],
+  cryptoSymbols: Set<string> = new Set(),
+): Promise<Record<string, number | null>> {
   if (symbols.length === 0) return {};
   const rows = await db
     .select()
@@ -65,6 +95,9 @@ async function pricesFor(symbols: string[]): Promise<Record<string, number | nul
   const out: Record<string, number | null> = {};
   for (const a of rows) out[a.symbol] = quotes[a.id]?.price ?? null;
   for (const s of symbols) if (!(s in out)) out[s] = null;
+
+  const missing = symbols.filter((s) => (out[s] ?? null) === null && cryptoSymbols.has(s));
+  await Promise.all(missing.map(async (s) => (out[s] = await lastCryptoClose(s))));
   return out;
 }
 
@@ -84,8 +117,10 @@ const capitalOf = (s: PoweroSettings, book: Book) => (book === "equity" ? s.equi
 export async function poweroState(now = Date.now()): Promise<PoweroState> {
   const settings = await resolvePoweroSettings();
   const orders = await listOrders(500);
-  const symbols = [...new Set(orders.filter((o) => o.status === "executed").map((o) => o.symbol))];
-  const prices = await pricesFor(symbols);
+  const executed = orders.filter((o) => o.status === "executed");
+  const symbols = [...new Set(executed.map((o) => o.symbol))];
+  const cryptoSymbols = new Set(executed.filter((o) => o.book === "crypto").map((o) => o.symbol));
+  const prices = await pricesFor(symbols, cryptoSymbols);
 
   const marks = {} as Record<Book, BookMark>;
   for (const book of BOOKS) {
@@ -231,26 +266,15 @@ export const benchBook = (book: Book) => `bench_${book}`;
  * Se compra UNA vez: la primera valoracion fija cuantas participaciones se
  * habrian comprado con el capital inicial, y a partir de ahi solo se revalora.
  */
-/**
- * Precio del indice. Ojo con lo evidente: el indice NO tiene por que estar en
- * tu cartera — BTC no lo esta — y `pricesFor` solo sabe de activos tuyos. Si
- * no aparece por ahi, para cripto se pide el ultimo cierre directamente. Sin
- * esto la linea de comparacion de cripto no existiria y la curva de PoWERo se
- * quedaria sin contra quien medirse, que es justo lo que la hace util.
- */
-async function benchmarkPrice(book: Book, symbol: string): Promise<number | null> {
-  const prices = await pricesFor([symbol]).catch(() => ({}) as Record<string, number | null>);
-  const own = prices[symbol] ?? null;
-  if (own !== null && own > 0) return own;
-  if (book !== "crypto") return null;
-  const closes = await datedCloses(symbol, 3).catch(() => []);
-  const last = closes.at(-1)?.close ?? null;
-  return last !== null && Number.isFinite(last) && last > 0 ? last : null;
-}
-
 async function markBenchmark(book: Book, capital: number, now: number): Promise<number | null> {
   const symbol = BENCHMARK[book];
-  const price = await benchmarkPrice(book, symbol);
+  // El indice tampoco tiene por que estar en tu cartera: BTC no lo esta. Vale
+  // la misma reserva que usan las posiciones, sin un camino aparte que
+  // mantener.
+  const prices = await pricesFor([symbol], book === "crypto" ? new Set([symbol]) : new Set()).catch(
+    () => ({}) as Record<string, number | null>,
+  );
+  const price = prices[symbol] ?? null;
   if (price === null || price <= 0) return null;
 
   const key = book === "equity" ? POWERO_KEYS.benchUnitsEquity : POWERO_KEYS.benchUnitsCrypto;

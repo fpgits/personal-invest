@@ -1,6 +1,7 @@
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import { poweroMarks } from "@/db/schema-runups";
+import { cachedMonthlyPlan } from "./conviction-run";
 import { markNow, proposeNow } from "./powero-run";
 import { POWERO_KEYS } from "./powero-settings";
 import { getSetting } from "./settings";
@@ -63,6 +64,8 @@ export type TickResult = {
   marked: boolean;
   /** Operaciones nuevas apuntadas en el libro nocional. */
   proposed: number;
+  /** Si el veredicto del dia quedo registrado como llamada medible. */
+  recorded: boolean;
   /** Lo que se salto por tope, para poder leerlo en la respuesta del cron. */
   skipped: string[];
 };
@@ -78,9 +81,21 @@ export async function poweroTick(
   const force = opts.force === true;
   const skipped: string[] = [];
   let proposed = 0;
+  let recorded = false;
 
   if (opts.propose) {
     if (force || due(await lastProposeAt(), PROPOSE_MIN_GAP_MS, now)) {
+      // El oraculo se corre AQUI y con `save`, una sola vez: deja el veredicto
+      // del dia escrito en `conviction_calls` (el marcador que luego mide
+      // `markForwardReturns`) y de paso llena el memo, asi que `proposeNow`
+      // reutiliza este mismo plan en vez de pagar EDGAR + Finnhub otra vez.
+      //
+      // Esta es la diferencia entre tener opinion y tener historial: sin estas
+      // filas no se puede responder nunca si el motor acierta, por muchos años
+      // que pase opinando.
+      recorded = await cachedMonthlyPlan({ force: true, save: true }, now)
+        .then((p) => p.batchId !== null)
+        .catch(() => false);
       proposed = (await proposeNow(now).catch(() => [])).length;
     } else {
       skipped.push("propose");
@@ -93,5 +108,5 @@ export async function poweroTick(
   if (marked) await markNow(now).catch(() => null);
   else skipped.push("mark");
 
-  return { marked, proposed, skipped };
+  return { marked, proposed, recorded, skipped };
 }
