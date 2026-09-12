@@ -11,7 +11,17 @@ export const POWERO_KEYS = {
   cryptoCapital: "powero_crypto_capital",
   /** manual = propone y decides; auto = apunta solo EN EL LIBRO NOCIONAL. */
   mode: "powero_mode",
+  /**
+   * Participaciones del indice compradas el dia que arranco cada libro. De
+   * aqui sale la linea contra la que se compara: "y si te hubieras limitado a
+   * comprar el indice con el mismo dinero el mismo dia".
+   */
+  benchUnitsEquity: "powero_bench_units_equity",
+  benchUnitsCrypto: "powero_bench_units_crypto",
 } as const;
+
+/** Contra que se mide cada libro. */
+export const BENCHMARK: Record<"equity" | "crypto", string> = { equity: "VOO", crypto: "BTC" };
 
 export type PoweroSettings = {
   equityCapital: number;
@@ -24,10 +34,15 @@ export type PoweroSettings = {
   mode: "manual" | "auto";
 };
 
+/**
+ * Automatico por defecto. Un instrumento de medida que solo mide cuando te
+ * acuerdas de pulsar un boton no mide nada: el sesgo lo pones tu al decidir
+ * cuando mirar. Sigue sin colocar una sola orden real.
+ */
 export const POWERO_DEFAULTS: PoweroSettings = {
   equityCapital: 1000,
   cryptoCapital: 1000,
-  mode: "manual",
+  mode: "auto",
 };
 
 /** Puro sobre el mapa de ajustes. Sin tope arbitrario: el capital es suyo. */
@@ -39,7 +54,7 @@ export function poweroFromSettings(all: Record<string, string>): PoweroSettings 
   return {
     equityCapital: num(POWERO_KEYS.equityCapital, POWERO_DEFAULTS.equityCapital),
     cryptoCapital: num(POWERO_KEYS.cryptoCapital, POWERO_DEFAULTS.cryptoCapital),
-    mode: all[POWERO_KEYS.mode] === "auto" ? "auto" : "manual",
+    mode: all[POWERO_KEYS.mode] === "manual" ? "manual" : POWERO_DEFAULTS.mode,
   };
 }
 

@@ -49,6 +49,8 @@ function verdict(symbol: string, posture: Posture, score: number, mos: number | 
     held: true,
     posture,
     score,
+    fundamentalScore: score,
+    modifiers: [],
     confidence: 1,
     dataQuality: posture === "no_coverage" ? "insufficient" : "full",
     factors: [],

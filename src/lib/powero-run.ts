@@ -15,7 +15,8 @@ import {
   type Order,
   type Signal,
 } from "./powero";
-import { resolvePoweroSettings, type PoweroSettings } from "./powero-settings";
+import { BENCHMARK, POWERO_KEYS, resolvePoweroSettings, type PoweroSettings } from "./powero-settings";
+import { getSetting, setSetting } from "./settings";
 import { id } from "./utils";
 
 /**
@@ -72,7 +73,7 @@ export type PoweroState = {
   orders: Order[];
   /** Propuestas vivas, esperando tu decision. */
   pending: Order[];
-  curve: Array<{ at: number; equity: number; book: Book }>;
+  curve: Array<{ at: number; equity: number; book: string }>;
   asOf: number;
 };
 
@@ -103,7 +104,7 @@ export async function poweroState(now = Date.now()): Promise<PoweroState> {
     marks,
     orders,
     pending: orders.filter((o) => o.status === "proposed"),
-    curve: curveRows.map((r) => ({ at: r.at, equity: r.equity, book: r.book as Book })),
+    curve: curveRows.map((r) => ({ at: r.at, equity: r.equity, book: r.book })),
     asOf: now,
   };
 }
@@ -213,10 +214,47 @@ export async function decide(orderId: string, decision: "executed" | "discarded"
   return rows.length > 0;
 }
 
-/** Apunta el patrimonio de cada libro. De estas filas sale la curva. */
-export async function markNow(now = Date.now()): Promise<Record<Book, number>> {
+/** El nombre del libro espejo que guarda la linea del indice. */
+export const benchBook = (book: Book) => `bench_${book}`;
+
+/**
+ * La linea contra la que se mide: el mismo dinero, el mismo dia, metido en el
+ * indice y quieto. Sin esto la curva de PoWERo no responde a la pregunta —
+ * decir "+8%" no vale de nada si el indice hizo +12% en el mismo periodo. El
+ * oraculo no compite contra cero, compite contra no hacer nada.
+ *
+ * Se compra UNA vez: la primera valoracion fija cuantas participaciones se
+ * habrian comprado con el capital inicial, y a partir de ahi solo se revalora.
+ */
+async function markBenchmark(book: Book, capital: number, now: number): Promise<number | null> {
+  const symbol = BENCHMARK[book];
+  const prices = await pricesFor([symbol]).catch(() => ({}) as Record<string, number | null>);
+  const price = prices[symbol] ?? null;
+  if (price === null || price <= 0) return null;
+
+  const key = book === "equity" ? POWERO_KEYS.benchUnitsEquity : POWERO_KEYS.benchUnitsCrypto;
+  const saved = Number(await getSetting(key).catch(() => null));
+  let units = Number.isFinite(saved) && saved > 0 ? saved : 0;
+  if (units === 0) {
+    units = capital / price;
+    await setSetting(key, String(units)).catch(() => undefined);
+  }
+
+  const equity = Math.round(units * price * 100) / 100;
+  await db
+    .insert(poweroMarks)
+    .values({ id: id(), book: benchBook(book), at: now, cash: 0, positionsValue: equity, equity })
+    .onConflictDoNothing();
+  return equity;
+}
+
+/**
+ * Apunta el patrimonio de cada libro y el del indice al mismo instante. De
+ * estas filas salen las dos curvas.
+ */
+export async function markNow(now = Date.now()): Promise<Record<string, number>> {
   const state = await poweroState(now);
-  const out = {} as Record<Book, number>;
+  const out: Record<string, number> = {};
   for (const book of BOOKS) {
     const m = state.marks[book];
     out[book] = m.equity;
@@ -231,6 +269,9 @@ export async function markNow(now = Date.now()): Promise<Record<Book, number>> {
         equity: m.equity,
       })
       .onConflictDoNothing();
+
+    const bench = await markBenchmark(book, capitalOf(state.settings, book), now).catch(() => null);
+    if (bench !== null) out[benchBook(book)] = bench;
   }
   return out;
 }
@@ -239,4 +280,11 @@ export async function markNow(now = Date.now()): Promise<Record<Book, number>> {
 export async function resetBook(book: Book): Promise<void> {
   await db.delete(poweroOrders).where(eq(poweroOrders.book, book));
   await db.delete(poweroMarks).where(eq(poweroMarks.book, book));
+  // Y la linea del indice con el: si no, el libro nuevo se compararia contra
+  // participaciones compradas en otra fecha y con otro capital.
+  await db.delete(poweroMarks).where(eq(poweroMarks.book, benchBook(book)));
+  await setSetting(
+    book === "equity" ? POWERO_KEYS.benchUnitsEquity : POWERO_KEYS.benchUnitsCrypto,
+    "0",
+  ).catch(() => undefined);
 }

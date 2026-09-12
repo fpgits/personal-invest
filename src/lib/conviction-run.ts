@@ -13,6 +13,7 @@ import { getMacro, riskFreeRate } from "./macro";
 import { getCachedQuotes } from "./market";
 import { computePortfolio } from "./portfolio";
 import { resolveOracleSettings, type OracleSettings } from "./settings";
+import { collectSignalsFor } from "./signals-run";
 import { batched } from "./utils";
 
 /**
@@ -76,6 +77,16 @@ export async function runConviction(): Promise<ConvictionRun> {
     targets.filter((t) => t.asset.assetClass !== "crypto").map((t) => t.asset.id),
   );
 
+  // La union: todo lo demas que sabemos de cada activo (directivos, gestores
+  // seguidos, hechos recientes, estado de tu tesis). Se lee de una vez y entra
+  // en evaluate() como modificador acotado. Mejor esfuerzo: si falla, el
+  // veredicto sale solo con fundamentales, como antes.
+  const signalMap = await collectSignalsFor(
+    targets
+      .filter((t) => t.asset.assetClass !== "crypto")
+      .map((t) => ({ symbol: t.asset.symbol, assetId: t.asset.id })),
+  ).catch(() => ({}) as Awaited<ReturnType<typeof collectSignalsFor>>);
+
   // Concurrencia baja: EDGAR hace varias peticiones por empresa (limite ~10/s).
   const results = await batched(targets, 2, async (t) => {
     const a = t.asset;
@@ -94,6 +105,7 @@ export async function runConviction(): Promise<ConvictionRun> {
       financials,
       riskFreeRate: rf,
       position: t.position,
+      signals: signalMap[a.symbol.toUpperCase()],
     });
   });
 

@@ -212,6 +212,35 @@ function VerdictRow({ r, currency }: { r: ConvictionResult; currency: string }) 
       {!noCov && (
         <div className="border-t border-border px-4 py-3">
           <p className="text-sm leading-relaxed text-muted">{r.rationale}</p>
+
+          {/* La unión: qué movió el score además de los fundamentales. Cada
+              línea con sus puntos y su porqué, para poder discutirla. */}
+          {r.modifiers.length > 0 && (
+            <div className="mt-3 border-t border-border pt-2">
+              <div className="label mb-1.5">
+                Fundamentales {r.fundamentalScore} → {r.score} con el resto de señales
+              </div>
+              <ul className="space-y-1">
+                {r.modifiers.map((m) => (
+                  <li key={m.source} className="flex items-start gap-2 text-xs">
+                    <span
+                      className={cn(
+                        "w-10 shrink-0 text-right tnum font-medium",
+                        m.points > 0 ? "text-up" : "text-down",
+                      )}
+                    >
+                      {m.points > 0 ? "+" : ""}
+                      {m.points}
+                    </span>
+                    <span className="text-muted">
+                      <b className="font-medium text-text">{m.label}.</b> {m.detail}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {r.caveats.length > 0 && (
             <div className="mt-2 space-y-1">
               {r.caveats.map((c, i) => (

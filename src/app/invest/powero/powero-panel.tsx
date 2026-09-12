@@ -13,7 +13,7 @@ type State = {
   marks: Record<Book, BookMark>;
   orders: Order[];
   pending: Order[];
-  curve: Array<{ at: number; equity: number; book: Book }>;
+  curve: Array<{ at: number; equity: number; book: string }>;
   asOf: number;
 };
 
@@ -56,18 +56,26 @@ function Cell({ label, value, hint, tone }: { label: string; value: string; hint
  * Curva de balance dibujada a mano en SVG. Sin librería: es una polilínea
  * sobre una rejilla, y así pesa cero y hereda el tema.
  */
-function Curve({ points, initial }: { points: Array<{ at: number; equity: number }>; initial: number }) {
+function Curve({
+  points,
+  bench,
+  initial,
+}: {
+  points: Array<{ at: number; equity: number }>;
+  bench: Array<{ at: number; equity: number }>;
+  initial: number;
+}) {
   if (points.length < 2) {
     return (
       <div className="flex h-56 items-center justify-center text-xs text-faint">
-        La curva aparece con la segunda foto. Pulsa Valorar, o espera al cron.
+        La curva aparece con la segunda foto. El cron valora cada pocas horas.
       </div>
     );
   }
   const w = 1000;
   const h = 220;
   const xs = points.map((p) => p.at);
-  const ys = points.map((p) => p.equity);
+  const ys = [...points.map((p) => p.equity), ...bench.map((p) => p.equity)];
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
   const lo = Math.min(...ys, initial);
@@ -77,7 +85,9 @@ function Curve({ points, initial }: { points: Array<{ at: number; equity: number
   const y1 = hi + pad;
   const px = (x: number) => ((x - minX) / Math.max(1, maxX - minX)) * w;
   const py = (y: number) => h - ((y - y0) / Math.max(1e-9, y1 - y0)) * h;
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${px(p.at).toFixed(1)},${py(p.equity).toFixed(1)}`).join("");
+  const path = (pts: Array<{ at: number; equity: number }>) =>
+    pts.map((p, i) => `${i === 0 ? "M" : "L"}${px(p.at).toFixed(1)},${py(p.equity).toFixed(1)}`).join("");
+  const line = path(points);
   const area = `${line}L${w},${h}L0,${h}Z`;
   const last = points[points.length - 1].equity;
   const up = last >= initial;
@@ -87,11 +97,26 @@ function Curve({ points, initial }: { points: Array<{ at: number; equity: number
       <svg viewBox={`0 0 ${w} ${h}`} className="h-56 w-full" preserveAspectRatio="none">
         <line x1="0" y1={py(initial)} x2={w} y2={py(initial)} stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" className="text-border-strong" />
         <path d={area} className={up ? "fill-up-dim" : "fill-down-dim"} />
+        {/* El indice: la linea a batir. Gris y fina, pero siempre visible. */}
+        {bench.length > 1 && (
+          <path
+            d={path(bench)}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1"
+            strokeDasharray="5 3"
+            className="text-faint"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
         <path d={line} fill="none" stroke="currentColor" strokeWidth="1.5" className={up ? "text-up" : "text-down"} vectorEffect="non-scaling-stroke" />
       </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-faint">
+      <div className="mt-1 flex flex-wrap justify-between gap-x-4 text-[10px] text-faint">
         <span>{fmtDate(minX)}</span>
-        <span>capital inicial {money(initial)}</span>
+        <span>
+          <span className={up ? "text-up" : "text-down"}>—</span> el oráculo · <span>- - -</span> el índice
+          (VOO/BTC) con el mismo dinero · capital inicial {money(initial)}
+        </span>
         <span>{fmtDate(maxX)}</span>
       </div>
     </div>
@@ -136,6 +161,14 @@ export function PoweroPanel() {
   const totalPct = totalInitial > 0 ? (totalPnl / totalInitial) * 100 : 0;
   const executed = (data?.orders ?? []).filter((o) => o.status === "executed");
   const wins = executed.filter((o) => o.side === "sell").length;
+  // La cifra que responde "¿esto funciona?": cuánto le saca el oráculo a
+  // haber metido el mismo dinero en el índice el mismo día y no tocarlo.
+  const benchCurve = combineCurve(data?.curve ?? [], true);
+  const benchNow = benchCurve.at(-1)?.equity ?? null;
+  const vsBench =
+    benchNow !== null && benchNow > 0 && totalInitial > 0
+      ? (total / totalInitial - benchNow / totalInitial) * 100
+      : null;
 
   return (
     <div className="space-y-px">
@@ -162,7 +195,12 @@ export function PoweroPanel() {
           <div className="grid grid-cols-2 border-y border-l border-border sm:grid-cols-4">
             <Cell label="Operaciones" value={String(executed.length)} hint="apuntadas en el libro" />
             <Cell label="Cierres" value={String(wins)} hint="posiciones vendidas" />
-            <Cell label="Propuestas" value={String(data?.pending.length ?? 0)} hint="esperando tu decisión" />
+            <Cell
+              label="vs índice"
+              value={vsBench === null ? "–" : pct(vsBench)}
+              hint="contra comprar y esperar"
+              tone={vsBench === null ? undefined : vsBench >= 0 ? "up" : "down"}
+            />
             <Cell
               label="Modo"
               value={data?.settings.mode === "auto" ? "AUTO" : "MANUAL"}
@@ -212,7 +250,8 @@ export function PoweroPanel() {
           <span className="text-[10px] text-faint">últimos 90 días</span>
         </div>
         <Curve
-          points={combineCurve(data?.curve ?? [])}
+          points={combineCurve(data?.curve ?? [], false)}
+          bench={combineCurve(data?.curve ?? [], true)}
           initial={totalInitial}
         />
       </div>
@@ -410,9 +449,18 @@ export function PoweroPanel() {
   );
 }
 
-/** Suma los dos libros por instante para pintar una sola curva. Puro. */
-function combineCurve(rows: Array<{ at: number; equity: number; book: Book }>): Array<{ at: number; equity: number }> {
+/**
+ * Suma por instante los libros que empiecen por el prefijo dado: "" para los
+ * dos libros del oráculo, "bench_" para las dos líneas del índice. Puro.
+ */
+function combineCurve(
+  rows: Array<{ at: number; equity: number; book: string }>,
+  bench: boolean,
+): Array<{ at: number; equity: number }> {
   const by = new Map<number, number>();
-  for (const r of rows) by.set(r.at, (by.get(r.at) ?? 0) + r.equity);
+  for (const r of rows) {
+    if (r.book.startsWith("bench_") !== bench) continue;
+    by.set(r.at, (by.get(r.at) ?? 0) + r.equity);
+  }
   return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([at, equity]) => ({ at, equity }));
 }

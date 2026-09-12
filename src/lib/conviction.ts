@@ -3,6 +3,12 @@ import type { FinancialsView } from "./edgar-facts";
 import { multiples } from "./edgar-facts";
 import { dcfRange, discountRate, marginOfSafety, reverseDcf, type DcfRange } from "./valuation";
 import {
+  collectModifiers,
+  scoreWithSignals,
+  type Modifier,
+  type SignalInput,
+} from "./conviction-signals";
+import {
   FACTOR_LABEL,
   POSTURE_RANK,
   type FactorKey,
@@ -74,6 +80,13 @@ export type ConvictionInput = {
   position?: { unrealizedPct: number; weight: number } | null;
   /** Reloj inyectable: decide si un ejercicio cerrado sigue siendo comparable. */
   now?: number;
+  /**
+   * Todo lo demas que la plataforma sabe de este activo: compras de
+   * directivos, movimientos de los gestores que sigues, hechos recientes y el
+   * estado de tu tesis. Modifica el score dentro de un techo; los
+   * fundamentales siguen mandando. Ver conviction-signals.ts.
+   */
+  signals?: SignalInput;
 };
 
 export type ConvictionResult = {
@@ -81,8 +94,15 @@ export type ConvictionResult = {
   name: string | null;
   held: boolean;
   posture: Posture;
-  /** 0..100. Puntuacion compuesta de conviccion. */
+  /** 0..100. Puntuacion final: fundamentales mas el resto de senales. */
   score: number;
+  /** La parte que sale solo de fundamentales y valoracion, sin modificar. */
+  fundamentalScore: number;
+  /**
+   * Lo que movio el score y por que: directivos, gestores, hechos y tesis.
+   * Vacio cuando no hay nada que decir. Ver conviction-signals.ts.
+   */
+  modifiers: Modifier[];
   /**
    * 0..1. Que tan solido es el veredicto: cobertura de datos MENOS los
    * castigos por fragilidad (una sola pata de valoracion, sin historico
@@ -969,6 +989,8 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
       held,
       posture: "no_coverage",
       score: 0,
+      fundamentalScore: 0,
+      modifiers: [],
       confidence: 0,
       dataQuality: "insufficient",
       factors: [],
@@ -1003,7 +1025,12 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
     presentWeight > 0
       ? present.reduce((s, f) => s + (f.score as number) * f.weight, 0) / presentWeight
       : 0;
-  const score = round(composite);
+  // Los fundamentales dan la base; el resto de lo que sabemos la modifica
+  // dentro de un techo. Aqui es donde la plataforma entera desemboca en un
+  // solo numero, en vez de tener cinco pestanas que no se hablan.
+  const fundamentalScore = round(composite);
+  const signals = collectModifiers(input.signals ?? {});
+  const score = scoreWithSignals(fundamentalScore, signals.total);
 
   const fv = fairValue(input);
   const upsidePct =
@@ -1066,6 +1093,11 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
   if (isFin(conv) && conv < 0.7) {
     caveats.push(`Solo ${Math.round(conv * 100)}% del beneficio se convierte en caja operativa.`);
   }
+  if (signals.conflict) {
+    caveats.push(
+      "Las senales no van a una: hay fuentes empujando en direcciones opuestas. Miralas una a una antes de fiarte del numero.",
+    );
+  }
   if (dataQuality === "partial") caveats.push("Cobertura parcial: faltan fundamentales.");
   if (input.assetClass === "equity" && !input.financials?.available) {
     caveats.push("Sin historico EDGAR (10-K); solo datos TTM.");
@@ -1077,6 +1109,8 @@ export function evaluate(input: ConvictionInput, now = Date.now()): ConvictionRe
     held,
     posture,
     score,
+    fundamentalScore,
+    modifiers: signals.modifiers,
     confidence,
     dataQuality,
     factors,
