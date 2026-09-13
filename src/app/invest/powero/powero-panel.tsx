@@ -14,6 +14,7 @@ type State = {
   orders: Order[];
   pending: Order[];
   curve: Array<{ at: number; equity: number; book: string }>;
+  clock: { lastProposeAt: number | null; nextProposeAt: number | null; lastMarkAt: number | null };
   asOf: number;
 };
 
@@ -27,6 +28,23 @@ const money = (n: number) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const pct = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 const BOOK_LABEL: Record<Book, string> = { equity: "Bolsa", crypto: "Cripto" };
+
+const when = (at: number | null) =>
+  at === null ? "nunca" : new Date(at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+/**
+ * El estado del reloj, en palabras. Un dia sin operaciones y un motor averiado
+ * se ven exactamente igual en una pantalla que solo enseña el resultado; esta
+ * linea es la que separa las dos cosas sin tener que abrir la base de datos.
+ */
+function clockLine(clock: State["clock"], now: number): string {
+  if (clock.lastProposeAt === null) {
+    return "El oráculo aún no ha corrido solo. La primera cita es esta noche a las 22:05 UTC.";
+  }
+  const next = clock.nextProposeAt ?? 0;
+  const cita = next <= now ? "en la próxima pasada (22:05 UTC)" : `no antes de ${when(next)}`;
+  return `Oráculo: última corrida ${when(clock.lastProposeAt)} · siguiente ${cita}. Valoración: ${when(clock.lastMarkAt)}.`;
+}
 
 /** Etiqueta pequeña en mayúsculas: el pegamento visual de toda la pantalla. */
 function Label({ children }: { children: React.ReactNode }) {
@@ -239,6 +257,12 @@ export function PoweroPanel() {
             {isLoading ? "cargando…" : data ? `actualizado ${new Date(data.asOf).toLocaleTimeString("es-ES")}` : ""}
           </span>
         </div>
+        {data && (
+          <p className="mt-2 text-[11px] text-faint">
+            {clockLine(data.clock, data.asOf)} El reloj valora cada hora en días de mercado y corre el oráculo
+            una vez al día; en fin de semana solo hay una valoración diaria porque nada se ha movido en bolsa.
+          </p>
+        )}
       </div>
 
       {error && <div className="border border-border bg-surface p-5 text-sm text-down">{(error as Error).message}</div>}

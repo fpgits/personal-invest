@@ -7,6 +7,8 @@ import {
   markBook,
   propose,
   signalFromLadder,
+  signalFromPlanLine,
+  signalFromTrim,
   signalFromVerdict,
   minTicket,
   ticketFor,
@@ -17,7 +19,7 @@ import {
   type Order,
   type Signal,
 } from "../src/lib/powero";
-import { due, MARK_MIN_GAP_MS, PROPOSE_MIN_GAP_MS } from "../src/lib/powero-tick";
+import { due, MARK_MIN_GAP_MS, PROPOSE_MIN_GAP_MS } from "../src/lib/powero-settings";
 
 let failures = 0;
 let checks = 0;
@@ -205,41 +207,73 @@ console.log("\n# propose: no cruza libros");
   eq(props.length, 0, "una senal de cripto no toca el libro de bolsa");
 }
 
-console.log("\n# senales desde el motor");
+console.log("\n# senales desde el motor: el PLAN manda en bolsa");
 {
-  const compra = signalFromVerdict({
-    symbol: "AAA", posture: "buy", score: 70, marginOfSafetyPct: 20, price: 10, rationale: "buena y barata",
-  });
-  eq([compra?.side, compra?.strength], ["buy", 90], "compra: postura 70 + margen 20");
-
-  const fuerte = signalFromVerdict({
-    symbol: "AAA", posture: "strong_buy", score: 85, marginOfSafetyPct: 40, price: 10, rationale: "",
-  });
-  eq(fuerte?.strength, 100, "no se pasa de 100");
-
-  const cara = signalFromVerdict({
-    symbol: "AAA", posture: "buy", score: 70, marginOfSafetyPct: -20, price: 10, rationale: "",
-  });
-  eq(cara?.strength, 50, "un margen negativo resta fuerza");
-
+  // El fallo que tuvo el libro de bolsa dos dias parado: la cartera entera en
+  // "mantener" y "reducir" producia cero senales, porque solo se miraba la
+  // palabra del veredicto. El plan del mismo oraculo si decia que comprar.
   eq(
-    signalFromVerdict({ symbol: "AAA", posture: "hold", score: 60, marginOfSafetyPct: 5, price: 10, rationale: "" }),
+    signalFromVerdict({ symbol: "AAA", posture: "hold", price: 10, rationale: "" }),
     null,
     "mantener no genera nada",
   );
-
-  const venta = signalFromVerdict({
-    symbol: "AAA", posture: "sell", score: 20, marginOfSafetyPct: null, price: 10, rationale: "rota",
-  });
-  eq([venta?.side, venta?.strength], ["sell", 100], "vender sale entera");
-
-  // Reducir NO vende en PoWERo: el libro es pequeno y media posicion de $12
-  // no se recorta. Se queda fuera hasta que la postura sea de salida.
   eq(
-    signalFromVerdict({ symbol: "AAA", posture: "reduce", score: 50, marginOfSafetyPct: -30, price: 10, rationale: "" }),
+    signalFromVerdict({ symbol: "AAA", posture: "buy", price: 10, rationale: "" }),
     null,
-    "reducir no genera orden en un libro de 100 dolares",
+    "las compras ya NO salen del veredicto: salen del plan",
   );
+
+  const venta = signalFromVerdict({ symbol: "AAA", posture: "sell", price: 10, rationale: "rota" });
+  eq([venta?.side, venta?.strength], ["sell", 100], "vender sale entera");
+  const evitar = signalFromVerdict({ symbol: "AAA", posture: "avoid", price: 10, rationale: "" });
+  eq(evitar?.side, "sell", "evitar tambien es una salida");
+
+  // Lo que se traslada de una linea del plan es su PESO, no los dolares: el
+  // plan reparte tu nomina, el libro reparte su propio capital.
+  const msft = signalFromPlanLine({ symbol: "MSFT", amount: 2030, planTotal: 4000, price: 400, reason: "r" });
+  const amzn = signalFromPlanLine({ symbol: "AMZN", amount: 1970, planTotal: 4000, price: 200, reason: "r" });
+  eq([msft?.side, msft?.strength], ["buy", 51], "2.030 de 4.000 es fuerza 51");
+  eq(amzn?.strength, 49, "1.970 de 4.000 es fuerza 49");
+  eq(msft?.source, "plan", "la senal dice de donde viene");
+  eq(signalFromPlanLine({ symbol: "A", amount: 0, planTotal: 4000, price: 10, reason: "" }), null, "sin importe no hay senal");
+  eq(signalFromPlanLine({ symbol: "A", amount: 100, planTotal: 0, price: 10, reason: "" }), null, "sin plan no hay reparto");
+  const solo = signalFromPlanLine({ symbol: "A", amount: 500, planTotal: 500, price: 10, reason: "" });
+  eq(solo?.strength, 100, "una sola linea se lleva toda la fuerza");
+
+  // Y el recorte es la otra mitad de la instruccion.
+  const trim = signalFromTrim({ symbol: "AMZN", pctOfPosition: 40, price: 200, reason: "cara" });
+  eq([trim?.side, trim?.strength, trim?.fraction], ["sell", 40, 0.4], "recortar el 40% es una venta parcial");
+  eq(signalFromTrim({ symbol: "A", pctOfPosition: 0, price: 10, reason: "" }), null, "un recorte de cero no es nada");
+  eq(signalFromTrim({ symbol: "A", pctOfPosition: 150, price: 10, reason: "" })?.fraction, 1, "no se vende mas del 100%");
+}
+
+console.log("\n# una venta parcial suelta solo su fraccion");
+{
+  const orders: Order[] = [
+    { id: "1", book: "equity", symbol: "AAA", side: "buy", qty: 10, price: 10, amount: 100,
+      status: "executed", reason: "", source: "t", proposedAt: 1, decidedAt: 1 },
+  ];
+  const state = buildBook("equity", 200, orders);
+  const mark = markBook(state, { AAA: 10 });
+  let n = 0;
+  const props = propose({
+    state,
+    mark,
+    signals: [{ book: "equity", symbol: "AAA", side: "sell", strength: 40, fraction: 0.4, price: 10, reason: "", source: "recorte" }],
+    now: 5,
+    makeId: () => `p${++n}`,
+  });
+  eq(props.length, 1, "el recorte propone una venta");
+  eq([props[0].qty, props[0].amount], [4, 40], "vende 4 de las 10 acciones");
+
+  const entera = propose({
+    state,
+    mark,
+    signals: [{ book: "equity", symbol: "AAA", side: "sell", strength: 100, price: 10, reason: "", source: "veredicto" }],
+    now: 6,
+    makeId: () => "q1",
+  });
+  eq(entera[0].qty, 10, "sin fraccion se sale entera");
 }
 
 console.log("\n# escalera cripto: el multiplicador es la fuerza");

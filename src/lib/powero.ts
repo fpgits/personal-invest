@@ -161,6 +161,13 @@ export type Signal = {
   side: Side;
   /** 0..100: cuanta conviccion hay detras. Decide el tamano. */
   strength: number;
+  /**
+   * Solo en ventas: que fraccion de la posicion se suelta (0..1). Sin valor,
+   * se sale entera. Existe porque el motor no dice "vende AMZN", dice "vende
+   * el 40% de AMZN" — y liquidar un buen negocio que solo esta caro no es lo
+   * que pidio.
+   */
+  fraction?: number;
   price: number | null;
   reason: string;
   source: string;
@@ -232,11 +239,14 @@ export function propose(args: {
     if (!isFin(s.price) || s.price <= 0) continue;
 
     if (s.side === "sell") {
-      const qty = qtyOf.get(s.symbol) ?? 0;
+      const held = qtyOf.get(s.symbol) ?? 0;
+      if (held <= 1e-9) continue;
+      const frac = isFin(s.fraction) && s.fraction > 0 ? Math.min(1, s.fraction) : 1;
+      const qty = round6(held * frac);
       if (qty <= 1e-9) continue;
       const amount = round2(qty * s.price);
-      qtyOf.set(s.symbol, 0);
-      valueOf.set(s.symbol, 0);
+      qtyOf.set(s.symbol, Math.max(0, held - qty));
+      valueOf.set(s.symbol, Math.max(0, (valueOf.get(s.symbol) ?? 0) - amount));
       cash += amount;
       out.push(order(makeId(), state.book, s, "sell", qty, s.price, amount, now));
       continue;
@@ -285,45 +295,90 @@ function order(
 // ---------------------------------------------------------------------------
 // Traduccion de los veredictos del motor a senales
 
-/** Postura -> fuerza de compra. Las de venta salen por otra via. */
-const BUY_STRENGTH: Partial<Record<Posture, number>> = { strong_buy: 100, buy: 70 };
-
 /**
- * El veredicto de bolsa como senal. La fuerza mezcla la postura con el margen
- * de seguridad: la misma postura no pesa igual con un 5% de descuento que con
- * un 40%. Puro.
+ * El veredicto como SALIDA. Solo eso.
+ *
+ * Antes esta funcion tambien fabricaba las compras, y ahi estaba el fallo que
+ * dejo el libro de bolsa dos dias sin operar: un veredicto es una opinion
+ * ("mantener", "reducir"), y solo las palabras exactas "comprar" o "comprar
+ * fuerte" producian senal. Con la cartera entera en "mantener" y "reducir",
+ * cero. Las compras salen ahora del PLAN, que es la instruccion con importe.
+ *
+ * Las salidas si nacen aqui, porque el plan solo recorta lo que tienes TU: si
+ * el libro nocional lleva algo que el motor manda evitar, hay que soltarlo
+ * aunque en tu cartera no exista. Puro.
  */
 export function signalFromVerdict(v: {
   symbol: string;
   posture: Posture;
-  score: number;
-  marginOfSafetyPct: number | null;
   price: number | null;
   rationale: string;
 }): Signal | null {
-  if (v.posture === "sell" || v.posture === "avoid") {
-    return {
-      book: "equity",
-      symbol: v.symbol,
-      side: "sell",
-      strength: 100,
-      price: v.price,
-      reason: v.rationale,
-      source: "veredicto",
-    };
-  }
-  const base = BUY_STRENGTH[v.posture];
-  if (base === undefined) return null;
-  const mos = Math.max(-20, Math.min(40, v.marginOfSafetyPct ?? 0));
-  const strength = Math.max(0, Math.min(100, base + mos));
+  if (v.posture !== "sell" && v.posture !== "avoid") return null;
   return {
     book: "equity",
     symbol: v.symbol,
-    side: "buy",
-    strength,
+    side: "sell",
+    strength: 100,
     price: v.price,
     reason: v.rationale,
     source: "veredicto",
+  };
+}
+
+/**
+ * Una linea del plan de bolsa como senal de compra.
+ *
+ * El importe del plan esta en TUS dolares (el efectivo del mes); lo que se
+ * traslada al libro es la FORMA del reparto, no la cifra: si el plan pone el
+ * 51% en MSFT y el 49% en AMZN, el libro hace lo mismo a su escala, tenga 100
+ * o 15.000. Asi PoWERo mide la decision del oraculo y no el tamano de tu
+ * nomina. Puro.
+ */
+export function signalFromPlanLine(l: {
+  symbol: string;
+  amount: number;
+  planTotal: number;
+  price: number | null;
+  reason: string;
+}): Signal | null {
+  if (!isFin(l.amount) || l.amount <= 0) return null;
+  if (!isFin(l.planTotal) || l.planTotal <= 0) return null;
+  const share = Math.min(1, l.amount / l.planTotal);
+  return {
+    book: "equity",
+    symbol: l.symbol,
+    side: "buy",
+    strength: Math.round(share * 100),
+    price: l.price,
+    reason: l.reason,
+    source: "plan",
+  };
+}
+
+/**
+ * Un recorte del plan como senal de venta parcial. El motor ya calculo que
+ * fraccion de la posicion suelta ("el 40% de AMZN"); esa misma fraccion se
+ * aplica a lo que tenga el libro. Puro.
+ */
+export function signalFromTrim(t: {
+  symbol: string;
+  pctOfPosition: number;
+  price: number | null;
+  reason: string;
+}): Signal | null {
+  if (!isFin(t.pctOfPosition)) return null;
+  const pct = Math.min(100, t.pctOfPosition);
+  if (pct <= 0) return null;
+  return {
+    book: "equity",
+    symbol: t.symbol,
+    side: "sell",
+    strength: pct,
+    fraction: pct / 100,
+    price: t.price,
+    reason: t.reason,
+    source: "recorte",
   };
 }
 

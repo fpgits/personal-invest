@@ -29,6 +29,26 @@ export const POWERO_KEYS = {
 /** Contra que se mide cada libro. */
 export const BENCHMARK: Record<"equity" | "crypto", string> = { equity: "VOO", crypto: "BTC" };
 
+/**
+ * La cadencia del reloj. Vive aqui, y no en el tick, porque tambien la
+ * necesita la pantalla: sin poder decir "el oraculo corrio ayer a las 22:05 y
+ * vuelve esta noche", un dia tranquilo se lee como una averia.
+ */
+/** Como mucho una valoracion por hora: la curva no necesita mas resolucion. */
+export const MARK_MIN_GAP_MS = 55 * 60_000;
+/**
+ * Como mucho una propuesta al dia. El oraculo se mueve con los fundamentales,
+ * que cambian por trimestres; proponer mas a menudo solo gastaria EDGAR y
+ * llenaria el registro de ruido.
+ */
+export const PROPOSE_MIN_GAP_MS = 20 * 3_600_000;
+
+/** Puro: si toca o no, dado cuando fue la ultima vez. */
+export function due(last: number | null, gapMs: number, now: number): boolean {
+  if (last === null || !Number.isFinite(last)) return true;
+  return now - last >= gapMs;
+}
+
 export type PoweroSettings = {
   equityCapital: number;
   cryptoCapital: number;

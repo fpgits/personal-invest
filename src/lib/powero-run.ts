@@ -10,13 +10,21 @@ import {
   markBook,
   propose,
   signalFromLadder,
+  signalFromPlanLine,
+  signalFromTrim,
   signalFromVerdict,
   type Book,
   type BookMark,
   type Order,
   type Signal,
 } from "./powero";
-import { BENCHMARK, POWERO_KEYS, resolvePoweroSettings, type PoweroSettings } from "./powero-settings";
+import {
+  BENCHMARK,
+  POWERO_KEYS,
+  PROPOSE_MIN_GAP_MS,
+  resolvePoweroSettings,
+  type PoweroSettings,
+} from "./powero-settings";
 import { getSetting, setSetting } from "./settings";
 import { id } from "./utils";
 
@@ -101,6 +109,27 @@ async function pricesFor(
   return out;
 }
 
+/** Ultima valoracion apuntada, de la propia tabla de marcas. */
+export async function lastMarkAt(): Promise<number | null> {
+  const rows = await db
+    .select({ at: poweroMarks.at })
+    .from(poweroMarks)
+    .orderBy(desc(poweroMarks.at))
+    .limit(1)
+    .catch(() => [] as Array<{ at: number }>);
+  return rows[0]?.at ?? null;
+}
+
+/**
+ * Ultima vez que el RELOJ corrio el oraculo. Va en ajustes y no en la tabla de
+ * ordenes a proposito: un dia sin operaciones tambien cuenta como corrido.
+ */
+export async function lastProposeAt(): Promise<number | null> {
+  const raw = await getSetting(POWERO_KEYS.lastProposeAt).catch(() => null);
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export type PoweroState = {
   settings: PoweroSettings;
   marks: Record<Book, BookMark>;
@@ -108,6 +137,16 @@ export type PoweroState = {
   /** Propuestas vivas, esperando tu decision. */
   pending: Order[];
   curve: Array<{ at: number; equity: number; book: string }>;
+  /**
+   * El reloj, en la respuesta. Sin esto no hay forma de distinguir "no hay
+   * senales hoy" de "esto esta roto", que es exactamente la duda que provoca
+   * un fin de semana sin operaciones.
+   */
+  clock: {
+    lastProposeAt: number | null;
+    nextProposeAt: number | null;
+    lastMarkAt: number | null;
+  };
   asOf: number;
 };
 
@@ -135,12 +174,18 @@ export async function poweroState(now = Date.now()): Promise<PoweroState> {
     .orderBy(poweroMarks.at)
     .catch(() => []);
 
+  const proposedAt = await lastProposeAt();
   return {
     settings,
     marks,
     orders,
     pending: orders.filter((o) => o.status === "proposed"),
     curve: curveRows.map((r) => ({ at: r.at, equity: r.equity, book: r.book })),
+    clock: {
+      lastProposeAt: proposedAt,
+      nextProposeAt: proposedAt === null ? null : proposedAt + PROPOSE_MIN_GAP_MS,
+      lastMarkAt: curveRows.at(-1)?.at ?? null,
+    },
     asOf: now,
   };
 }
@@ -160,13 +205,46 @@ export async function collectSignals(): Promise<Signal[]> {
   const cryptoSymbols = new Set(plan.run.holdings.filter((h) => h.assetClass === "crypto").map((h) => h.symbol));
 
   const out: Signal[] = [];
+
+  // Bolsa: el PLAN, no el veredicto.
+  //
+  // Aqui estaba el fallo que tuvo el libro de bolsa dos dias a cero. El
+  // veredicto es una opinion — "mantener", "reducir", "sin cobertura" — y solo
+  // las palabras "comprar" y "comprar fuerte" producian senal. Con las 25
+  // valoraciones repartidas en 8 mantener, 8 reducir y 9 sin cobertura, el
+  // resultado era cero, siempre. Mientras tanto el plan del mismo oraculo si
+  // decia que hacer, con importe: 2.030 a MSFT, 1.970 a AMZN.
+  //
+  // Cripto nunca tuvo el problema porque ya leia `plan.crypto.lines`, la
+  // instruccion. Por eso lo unico que habia operado era la escalera.
+  const planTotal = plan.equity.lines.reduce((sum, l) => sum + l.amount, 0);
+  for (const l of plan.equity.lines) {
+    const s = signalFromPlanLine({
+      symbol: l.symbol,
+      amount: l.amount,
+      planTotal,
+      price: priceOf.get(l.symbol) ?? null,
+      reason: l.reason,
+    });
+    if (s) out.push(s);
+  }
+  // Y los recortes, que son la otra mitad de la instruccion.
+  for (const t of plan.equity.trims) {
+    const s = signalFromTrim({
+      symbol: t.symbol,
+      pctOfPosition: t.pctOfPosition,
+      price: priceOf.get(t.symbol) ?? null,
+      reason: t.reason,
+    });
+    if (s) out.push(s);
+  }
+  // Salidas del veredicto: el plan solo recorta lo que tienes TU, asi que si
+  // el libro lleva algo que el motor manda evitar, se suelta igual.
   for (const v of plan.run.results) {
     if (cryptoSymbols.has(v.symbol)) continue;
     const s = signalFromVerdict({
       symbol: v.symbol,
       posture: v.posture,
-      score: v.score,
-      marginOfSafetyPct: v.marginOfSafetyPct,
       price: priceOf.get(v.symbol) ?? null,
       rationale: v.rationale,
     });
@@ -185,8 +263,16 @@ export async function collectSignals(): Promise<Signal[]> {
   return out;
 }
 
-/** Genera propuestas nuevas y las guarda. Devuelve las creadas. */
-export async function proposeNow(now = Date.now()): Promise<Order[]> {
+/**
+ * Genera propuestas nuevas y las guarda. Devuelve las creadas.
+ *
+ * `stamp` solo lo pone el reloj. Es una distincion que costo un dia entero de
+ * confusion: el boton tambien lo ponia, asi que una pulsacion tuya a las 05:03
+ * dejaba la corrida automatica de las 22:05 por debajo del tope de 20 h y el
+ * oraculo se saltaba su cita. Mirar no puede cancelar la medicion — el boton
+ * es una vista previa, la cita diaria es el instrumento.
+ */
+export async function proposeNow(now = Date.now(), opts: { stamp?: boolean } = {}): Promise<Order[]> {
   const state = await poweroState(now);
   const signals = await collectSignals();
   // Sin duplicar: si ya hay una propuesta viva para ese simbolo y lado, se deja.
@@ -208,7 +294,7 @@ export async function proposeNow(now = Date.now()): Promise<Order[]> {
   // Queda apuntado que el oraculo YA corrio, aunque no saliera nada. Sin esta
   // marca el reloj no sabria distinguir "hoy no habia nada que hacer" de "hoy
   // todavia no he mirado", y volveria a correrlo entero en cada pasada.
-  await setSetting(POWERO_KEYS.lastProposeAt, String(now)).catch(() => undefined);
+  if (opts.stamp) await setSetting(POWERO_KEYS.lastProposeAt, String(now)).catch(() => undefined);
   if (created.length === 0) return [];
 
   const bySymbol = new Map(
