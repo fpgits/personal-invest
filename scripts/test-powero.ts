@@ -276,12 +276,30 @@ console.log("\n# una venta parcial suelta solo su fraccion");
   eq(entera[0].qty, 10, "sin fraccion se sale entera");
 }
 
-console.log("\n# escalera cripto: el multiplicador es la fuerza");
+console.log("\n# escalera cripto: el multiplicador abre la puerta, el importe la dimensiona");
 {
-  eq(signalFromLadder({ symbol: "BTC", multiplier: 1.25, confirmed: true, price: 40000, reason: "r" })?.strength, 25, "1,25x -> 25");
-  eq(signalFromLadder({ symbol: "BTC", multiplier: 2, confirmed: true, price: 40000, reason: "r" })?.strength, 100, "2x -> 100");
-  eq(signalFromLadder({ symbol: "BTC", multiplier: 1.5, confirmed: false, price: 40000, reason: "r" }), null, "tramo sin confirmar no compra");
-  eq(signalFromLadder({ symbol: "BTC", multiplier: 1, confirmed: true, price: 40000, reason: "r" }), null, "aporte normal no es senal");
+  // El plan real: 1.880 a BTC y 1.250 a ETH. Dos monedas con el MISMO 1,25x
+  // pero pesos distintos — antes salian dos tickets identicos de 62,50.
+  const btc = signalFromLadder({ symbol: "BTC", multiplier: 1.25, confirmed: true, amount: 1880, planTotal: 3130, price: 40000, reason: "r" });
+  const eth = signalFromLadder({ symbol: "ETH", multiplier: 1.25, confirmed: true, amount: 1250, planTotal: 3130, price: 2500, reason: "r" });
+  eq(btc?.strength, 60, "1.880 de 3.130 es 60");
+  eq(eth?.strength, 40, "1.250 de 3.130 es 40");
+  truthy((btc?.targetPct ?? 0) > (eth?.targetPct ?? 0), "el mismo multiplicador ya no da el mismo tamano");
+
+  eq(signalFromLadder({ symbol: "BTC", multiplier: 1.5, confirmed: false, amount: 100, planTotal: 100, price: 4e4, reason: "" }), null, "tramo sin confirmar no compra");
+  eq(signalFromLadder({ symbol: "BTC", multiplier: 1, confirmed: true, amount: 100, planTotal: 100, price: 4e4, reason: "" }), null, "aporte normal no es senal");
+  eq(signalFromLadder({ symbol: "BTC", multiplier: 1.25, confirmed: true, amount: 0, planTotal: 100, price: 4e4, reason: "" }), null, "sin importe no hay senal");
+}
+
+console.log("\n# el objetivo del plan se compra por el hueco que falta");
+{
+  // Libro de 1.000 con 62,50 ya puestos en BTC y un objetivo del 60%.
+  eq(ticketFor({ strength: 60, equity: 1000, cash: 937.5, alreadyInSymbol: 62.5, targetPct: 60 }), 537.5, "compra el hueco hasta el 60%, no un ticket fijo");
+  eq(ticketFor({ strength: 60, equity: 1000, cash: 100, alreadyInSymbol: 62.5, targetPct: 60 }), 100, "nunca mas efectivo del que hay");
+  eq(ticketFor({ strength: 60, equity: 1000, cash: 900, alreadyInSymbol: 600, targetPct: 60 }), 0, "ya en el objetivo: no compra");
+  eq(ticketFor({ strength: 60, equity: 1000, cash: 900, alreadyInSymbol: 580, targetPct: 60 }), 0, "el resto hasta el objetivo no llega al ticket minimo");
+  // El viejo camino sigue valiendo cuando no hay plan detras.
+  eq(ticketFor({ strength: 25, equity: 1000, cash: 1000, alreadyInSymbol: 0 }), 62.5, "sin objetivo, la fuerza sigue mandando");
 }
 
 console.log("\n# el libro nunca se queda en negativo");

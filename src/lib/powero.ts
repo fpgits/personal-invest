@@ -168,6 +168,12 @@ export type Signal = {
    * que pidio.
    */
   fraction?: number;
+  /**
+   * Solo en compras que vienen del plan: que porcentaje del libro quiere el
+   * oraculo en este nombre. Es un OBJETIVO, no un ticket — se compra el hueco
+   * que falta para llegar, no la misma cifra una y otra vez.
+   */
+  targetPct?: number;
   price: number | null;
   reason: string;
   source: string;
@@ -203,9 +209,23 @@ export function ticketFor(args: {
   equity: number;
   cash: number;
   alreadyInSymbol: number;
+  targetPct?: number;
 }): number {
-  const { strength, equity, cash, alreadyInSymbol } = args;
+  const { strength, equity, cash, alreadyInSymbol, targetPct } = args;
   if (equity <= 0 || cash <= 0) return 0;
+
+  // Con objetivo del plan se compra el HUECO que falta para llegar a el.
+  //
+  // El reparto ya lo decidio el oraculo, y lo decidio con sus propios topes por
+  // posicion. Volver a recortarlo aqui con los topes de PoWERo seria medir una
+  // version aguada de su decision, que es justo lo que un libro de prueba no
+  // debe hacer: si dice 60% BTC, se mide el 60% BTC.
+  if (isFin(targetPct) && targetPct > 0) {
+    const target = (equity * Math.min(100, targetPct)) / 100;
+    const gap = Math.min(Math.max(0, target - alreadyInSymbol), cash);
+    return gap >= minTicket(equity) ? round2(gap) : 0;
+  }
+
   const byStrength = (equity * MAX_TICKET_PCT * Math.max(0, Math.min(100, strength))) / 10000;
   const roomInSymbol = Math.max(0, (equity * MAX_SYMBOL_PCT) / 100 - alreadyInSymbol);
   const amount = Math.min(byStrength, roomInSymbol, cash);
@@ -257,6 +277,7 @@ export function propose(args: {
       equity: mark.equity,
       cash,
       alreadyInSymbol: valueOf.get(s.symbol) ?? 0,
+      targetPct: s.targetPct,
     });
     if (amount <= 0) continue;
     cash -= amount;
@@ -350,6 +371,7 @@ export function signalFromPlanLine(l: {
     symbol: l.symbol,
     side: "buy",
     strength: Math.round(share * 100),
+    targetPct: share * 100,
     price: l.price,
     reason: l.reason,
     source: "plan",
@@ -383,24 +405,37 @@ export function signalFromTrim(t: {
 }
 
 /**
- * La escalera cripto como senal: el multiplicador del ciclo ES la fuerza. Un
- * tramo retenido (multiplicador 1 sin confirmar) no compra. Puro.
+ * La escalera cripto como senal.
+ *
+ * El multiplicador decide SI se compra (un tramo retenido, o sin confirmar, no
+ * compra). El IMPORTE del plan decide CUANTO. Esa distincion costo cuatro
+ * ordenes de 62,50: se usaba el multiplicador tambien como tamano, y como BTC
+ * y ETH tenian el mismo 1,25x salian dos tickets identicos y minusculos — un
+ * 6% del libro cada uno — mientras el plan repartia 1.880 a BTC y 1.250 a ETH,
+ * que no es ni la misma proporcion ni el mismo orden de magnitud.
+ *
+ * Es el mismo fallo que tenia el lado de bolsa: leer del plan el campo
+ * equivocado. Puro.
  */
 export function signalFromLadder(l: {
   symbol: string;
   multiplier: number;
   confirmed: boolean;
+  amount: number;
+  planTotal: number;
   price: number | null;
   reason: string;
 }): Signal | null {
   if (!l.confirmed || l.multiplier <= 1) return null;
-  // 1,25x -> 40; 1,5x -> 60; 2x -> 100.
-  const strength = Math.max(0, Math.min(100, (l.multiplier - 1) * 100));
+  if (!isFin(l.amount) || l.amount <= 0) return null;
+  if (!isFin(l.planTotal) || l.planTotal <= 0) return null;
+  const share = Math.min(1, l.amount / l.planTotal);
   return {
     book: "crypto",
     symbol: l.symbol,
     side: "buy",
-    strength,
+    strength: Math.round(share * 100),
+    targetPct: share * 100,
     price: l.price,
     reason: l.reason,
     source: "escalera",

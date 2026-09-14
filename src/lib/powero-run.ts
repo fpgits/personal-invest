@@ -250,11 +250,16 @@ export async function collectSignals(): Promise<Signal[]> {
     });
     if (s) out.push(s);
   }
+  // Cripto: mismo criterio. El multiplicador dice si se compra, el importe del
+  // plan dice cuanto y en que proporcion entre monedas.
+  const cryptoTotal = plan.crypto.lines.reduce((sum, l) => sum + (l.amount ?? 0), 0);
   for (const l of plan.crypto.lines) {
     const s = signalFromLadder({
       symbol: l.symbol,
       multiplier: l.multiplier,
       confirmed: l.confirmed,
+      amount: l.amount ?? 0,
+      planTotal: cryptoTotal,
       price: l.stats?.price ?? null,
       reason: l.reason,
     });
