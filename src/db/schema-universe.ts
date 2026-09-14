@@ -79,3 +79,44 @@ export const universeRuns = sqliteTable("universe_runs", {
 });
 
 export type UniverseRun = typeof universeRuns.$inferSelect;
+
+/**
+ * El universo cripto: las mayores del mercado mas las tuyas.
+ *
+ * Tabla aparte de `universe_companies` a proposito: una empresa se valora por
+ * sus cuentas y una moneda por su ciclo — no comparten ni una sola columna
+ * util. Meterlas juntas obligaria a dejar la mitad en null y a explicar cual
+ * mitad cada vez que se lee.
+ */
+export const universeCoins = sqliteTable(
+  "universe_coins",
+  {
+    /** Id de CoinGecko ("bitcoin"), que es la clave estable; el simbolo no. */
+    id: text("id").primaryKey(),
+    symbol: text("symbol").notNull(),
+    name: text("name").notNull(),
+    rank: integer("rank"),
+
+    price: real("price"),
+    marketCap: real("market_cap"),
+    volume24h: real("volume_24h"),
+    ath: real("ath"),
+    /** Caida desde el maximo historico, en % y negativa. */
+    drawdownPct: real("drawdown_pct"),
+    athDaysAgo: integer("ath_days_ago"),
+    /** Volumen 24 h sobre capitalizacion, en %: si se puede salir o no. */
+    turnoverPct: real("turnover_pct"),
+
+    /** En tu cartera: se valora aunque no pase la criba. */
+    held: integer("held", { mode: "boolean" }).notNull(),
+    usable: integer("usable", { mode: "boolean" }).notNull(),
+    /** Por que no entra, cuando no entra. Un hueco tiene que verse. */
+    reason: text("reason"),
+
+    sourceDate: text("source_date").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [index("universe_coins_symbol_idx").on(t.symbol), index("universe_coins_usable_idx").on(t.usable)],
+);
+
+export type UniverseCoin = typeof universeCoins.$inferSelect;

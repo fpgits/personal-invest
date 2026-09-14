@@ -86,6 +86,47 @@ export async function quotes(
   return out;
 }
 
+/**
+ * Una fila del mercado con lo que hace falta para cribar, no solo el precio.
+ * Es lo mismo que ya devuelve `/coins/markets`; aqui se le pide entero.
+ */
+export type TopMarketRow = {
+  id: string;
+  symbol: string;
+  name: string;
+  market_cap_rank: number | null;
+  current_price: number | null;
+  market_cap: number | null;
+  total_volume: number | null;
+  /** Maximo historico y cuando fue: lo que necesita la escalera de ciclo. */
+  ath: number | null;
+  ath_date: string | null;
+  ath_change_percentage: number | null;
+};
+
+/**
+ * Las N mayores por capitalizacion, en UNA peticion.
+ *
+ * Esta es la diferencia entre mirar dos monedas y mirar el mercado: 100
+ * monedas con precio, capitalizacion, volumen y maximo historico caben en una
+ * sola llamada. `ids` permite ademas asegurar que entren las tuyas aunque no
+ * esten entre las primeras.
+ */
+export async function topMarkets(
+  limit = 100,
+  opts: { vs?: string; ids?: string[] } = {},
+): Promise<TopMarketRow[]> {
+  const params: Record<string, string> = {
+    vs_currency: opts.vs ?? "usd",
+    order: "market_cap_desc",
+    per_page: String(Math.min(Math.max(limit, 1), 250)),
+    page: "1",
+    sparkline: "false",
+  };
+  if (opts.ids?.length) params.ids = opts.ids.join(",");
+  return call<TopMarketRow[]>("/coins/markets", params);
+}
+
 export async function quote(coinId: string, vs = "usd"): Promise<Quote> {
   const all = await quotes([coinId], vs);
   const q = all[coinId];
