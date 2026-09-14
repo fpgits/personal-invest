@@ -14,7 +14,13 @@ import { coingecko } from "./market";
  * diferencia no es de grado.
  */
 
-export const DEFAULT_TOP = 100;
+/**
+ * 200, no 100. La banda 101-200 tiene la misma proporcion de monedas ilíquidas
+ * que la primera (22 de cada 100 en las dos) y capitalizaciones de 164 a 556
+ * M$: son activos reales, no polvo. Y cuesta lo mismo — la peticion admite
+ * hasta 250 de una vez. A partir de 250 si empieza a entrar basura.
+ */
+export const DEFAULT_TOP = 200;
 const WRITE_CHUNK = 200;
 
 export type CryptoSweepResult = {

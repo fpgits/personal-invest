@@ -4,6 +4,7 @@
  */
 import {
   daysSince,
+  isStablecoin,
   screenCoin,
   screenUniverse,
   summarize,
@@ -85,6 +86,30 @@ console.log("\n# la criba: lo que no se puede vender no es una oportunidad");
     "sin maximo historico",
     "sin maximo no hay escalera de ciclo",
   );
+}
+
+console.log("\n# las estables fuera: no tienen ciclo que medir");
+{
+  // Medido en CoinGecko el 14/09/2026: NUEVE de las 100 mayores son estables,
+  // y sus caidas desde maximos son reales pero no significan nada.
+  const usdt = screenCoin(
+    coin({ id: "tether", symbol: "usdt", name: "Tether", current_price: 1.0, ath: 1.32, market_cap: 180e9, total_volume: 90e9 }),
+    false,
+    AHORA,
+  );
+  eq(usdt.drawdownPct, -24.2, "USDT marca -24% desde su maximo");
+  truthy(!usdt.usable, "y aun asi no entra");
+  eq(usdt.reason, "estable: no tiene ciclo que medir", "por ser estable, no por la caida");
+
+  truthy(isStablecoin("USDC", "USDC"), "por simbolo");
+  truthy(isStablecoin("BUIDL", "BlackRock USD Institutional Digital Liquidity Fund"), "un nombre con USD");
+  truthy(isStablecoin("xyz", "Some Stablecoin"), "o que se llame estable");
+  truthy(isStablecoin("EURC", "Euro Coin"), "las de euro tambien");
+  truthy(!isStablecoin("BTC", "Bitcoin"), "bitcoin no es estable");
+  truthy(!isStablecoin("SOL", "Solana"), "solana tampoco");
+  // El que mas me preocupaba: que el patron se comiera una moneda real.
+  truthy(!isStablecoin("SYRUP", "Maple Finance"), "no se lleva por delante monedas normales");
+  truthy(!isStablecoin("LDO", "Lido DAO"), "ni tokens de gobernanza");
 }
 
 console.log("\n# lo tuyo entra siempre, pero sin fingir que aprobo");

@@ -8,7 +8,7 @@ import type { TopMarketRow } from "./market/coingecko";
  * mayores por capitalizacion UNIDAS a las tuyas, que es la misma regla que en
  * bolsa (el mercado mas lo que ya tienes).
  *
- * Una sola peticion a CoinGecko trae las 100 con precio, capitalizacion,
+ * Una sola peticion a CoinGecko trae hasta 250 con precio, capitalizacion,
  * volumen, maximo historico y su fecha. Con eso se puede cribar sin bajar el
  * historico de ninguna: el historico largo, que es lo caro, solo hace falta
  * despues para las que sobrevivan a la criba.
@@ -44,16 +44,53 @@ export type CoinScreen = {
  * Minimos para entrar. No son opiniones de inversion: son el umbral por debajo
  * del cual el dato no significa nada.
  *
- * El de rotacion es el que mas importa y el menos obvio: una moneda puede
- * estar entre las 100 mayores y no tener con quien negociar. Una caida del 90%
- * desde maximos en algo que mueve el 0,01% de su capitalizacion al dia no es
- * una oportunidad, es una trampa — el precio que ves no es un precio al que
- * puedas salir.
+ * El de rotacion es el mas importante y el menos obvio: una moneda puede estar
+ * entre las 100 mayores y no tener con quien negociar. Una caida del 90% desde
+ * maximos en algo que mueve el 0,01% de su capitalizacion al dia no es una
+ * oportunidad, es una trampa — el precio que ves no es un precio al que puedas
+ * salir.
+ */
+
+/**
+ * Medido contra CoinGecko el 14/09/2026: en las 250 mayores NO HAY NINGUNA por
+ * debajo de 115 M$. El puesto 100 es XDC con 556 M$ y el 200 es BORG con 164.
+ * O sea que un suelo de 50 M no filtra nada — el corte real lo pone el propio
+ * ranking. Se deja bajo a proposito, como red de seguridad por si algun dia se
+ * amplia el universo, pero no cuenta con el nadie.
  */
 export const MIN_MARKET_CAP = 50_000_000;
+/**
+ * Este si trabaja: 22 de las 100 primeras estan por debajo. Y sigue firme en
+ * la banda 101-200, tambien 22 de 100 — que es justo el dato que dice que
+ * ampliar a 200 no baja la calidad, solo el tamaño.
+ */
 export const MIN_TURNOVER_PCT = 0.5;
 /** Sin maximo historico no hay escalera: es la referencia de todo el ciclo. */
 export const REQUIRE_ATH = true;
+
+/**
+ * Las estables no tienen ciclo, y la escalera no lo sabe.
+ *
+ * Esto no es limpieza cosmetica. En las 100 mayores hay NUEVE estables, y sus
+ * caidas desde maximos son reales pero no significan nada: USDT marca -24%,
+ * DAI -18%, USDC -4%. Son despegues viejos de un pico puntual. Para un motor
+ * que compra tramos cuando algo cae mucho desde su maximo, un USDT a "-24% del
+ * maximo" es una oportunidad — y es una moneda cuyo precio objetivo es un
+ * dolar, por diseño.
+ *
+ * Un 9% del universo serian señales falsas con pinta perfectamente razonable.
+ *
+ * La lista hay que revisarla: salen estables nuevas cada año. El patron del
+ * nombre cubre a las que se llaman como lo que son, que son casi todas.
+ */
+const STABLE_SYMBOL =
+  /^(usdt|usdc|dai|usde|usds|susds|fdusd|pyusd|tusd|usd1|rlusd|busd|frax|lusd|gusd|usdp|usdf|usdx|usdtb|usdd|buidl|eurc|eurs|eurt|steur)$/i;
+const STABLE_NAME = /\b(tether|usd|stablecoin|stable coin|dai|euro coin)\b/i;
+
+/** Si es una estable. Puro. */
+export function isStablecoin(symbol: string, name: string): boolean {
+  return STABLE_SYMBOL.test(symbol.trim()) || STABLE_NAME.test(name ?? "");
+}
 
 const fin = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n);
 
@@ -87,6 +124,7 @@ export function screenCoin(row: TopMarketRow, held: boolean, now: number): CoinS
 
   let reason: string | null = null;
   if (price === null) reason = "sin precio";
+  else if (isStablecoin(row.symbol ?? "", row.name ?? "")) reason = "estable: no tiene ciclo que medir";
   else if (REQUIRE_ATH && ath === null) reason = "sin maximo historico";
   else if (marketCap === null || marketCap < MIN_MARKET_CAP) reason = "capitalizacion por debajo del minimo";
   else if (turnoverPct === null || turnoverPct < MIN_TURNOVER_PCT) reason = "no se negocia lo suficiente para salir";
