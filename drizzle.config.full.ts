@@ -16,7 +16,7 @@ import { defineConfig } from "drizzle-kit";
  * usa nadie.
  */
 export default defineConfig({
-  schema: ["./src/db/schema.ts", "./src/db/schema-runups.ts"],
+  schema: ["./src/db/schema.ts", "./src/db/schema-runups.ts", "./src/db/schema-universe.ts"],
   out: "./drizzle",
   dialect: "turso",
   dbCredentials: {
