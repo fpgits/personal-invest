@@ -6,6 +6,7 @@ import { cachedMonthlyPlan } from "./conviction-run";
 import { getCachedQuotes } from "./market";
 import { dailyCloses, datedCloses } from "./market/crypto-history";
 import {
+  attribute,
   buildBook,
   markBook,
   propose,
@@ -13,6 +14,7 @@ import {
   signalFromPlanLine,
   signalFromTrim,
   signalFromVerdict,
+  type Attribution,
   type Book,
   type BookMark,
   type Order,
@@ -133,6 +135,11 @@ export async function lastProposeAt(): Promise<number | null> {
 export type PoweroState = {
   settings: PoweroSettings;
   marks: Record<Book, BookMark>;
+  /**
+   * De donde sale el resultado de cada libro y cuanto se le saca al indice.
+   * Es lo que convierte "vamos a perdida" en una frase con sujeto.
+   */
+  attribution: Record<Book, Attribution>;
   orders: Order[];
   /** Propuestas vivas, esperando tu decision. */
   pending: Order[];
@@ -174,10 +181,19 @@ export async function poweroState(now = Date.now()): Promise<PoweroState> {
     .orderBy(poweroMarks.at)
     .catch(() => []);
 
+  // La ultima linea del indice de cada libro, para poder atribuir contra ella.
+  const benchNow = {} as Record<Book, number | null>;
+  for (const book of BOOKS) {
+    benchNow[book] = curveRows.filter((r) => r.book === benchBook(book)).at(-1)?.equity ?? null;
+  }
+  const attribution = {} as Record<Book, Attribution>;
+  for (const book of BOOKS) attribution[book] = attribute(marks[book], benchNow[book]);
+
   const proposedAt = await lastProposeAt();
   return {
     settings,
     marks,
+    attribution,
     orders,
     pending: orders.filter((o) => o.status === "proposed"),
     curve: curveRows.map((r) => ({ at: r.at, equity: r.equity, book: r.book })),
@@ -269,15 +285,27 @@ export async function collectSignals(): Promise<Signal[]> {
 }
 
 /**
- * Genera propuestas nuevas y las guarda. Devuelve las creadas.
+ * Genera propuestas nuevas. Devuelve las creadas.
  *
  * `stamp` solo lo pone el reloj. Es una distincion que costo un dia entero de
  * confusion: el boton tambien lo ponia, asi que una pulsacion tuya a las 05:03
  * dejaba la corrida automatica de las 22:05 por debajo del tope de 20 h y el
  * oraculo se saltaba su cita. Mirar no puede cancelar la medicion — el boton
  * es una vista previa, la cita diaria es el instrumento.
+ *
+ * `commit` es la otra mitad de esa misma idea, y la que faltaba. Sin ella el
+ * boton no solo miraba: en modo automatico cada pulsacion CREABA y apuntaba las
+ * ordenes en el libro. Entre el 12 y el 14 de septiembre eso solto cuatro
+ * tramos de la escalera en 48 horas —tres de ellos a golpe de boton— y dejo los
+ * dos libros invertidos al 100% con precios separados por un 0,5%. El resultado
+ * no medía al oraculo: medía cuantas veces se habia pulsado. Con `commit:
+ * false` el boton calcula y enseña; escribir es cosa del reloj.
  */
-export async function proposeNow(now = Date.now(), opts: { stamp?: boolean } = {}): Promise<Order[]> {
+export async function proposeNow(
+  now = Date.now(),
+  opts: { stamp?: boolean; commit?: boolean } = {},
+): Promise<Order[]> {
+  const commit = opts.commit !== false;
   const state = await poweroState(now);
   const signals = await collectSignals();
   // Sin duplicar: si ya hay una propuesta viva para ese simbolo y lado, se deja.
@@ -301,6 +329,8 @@ export async function proposeNow(now = Date.now(), opts: { stamp?: boolean } = {
   // todavia no he mirado", y volveria a correrlo entero en cada pasada.
   if (opts.stamp) await setSetting(POWERO_KEYS.lastProposeAt, String(now)).catch(() => undefined);
   if (created.length === 0) return [];
+  // Vista previa: se devuelve lo que haria el oraculo, sin tocar el libro.
+  if (!commit) return created;
 
   const bySymbol = new Map(
     (await db.select().from(assets).catch(() => [])).map((a) => [a.symbol, a.id] as const),

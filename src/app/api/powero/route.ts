@@ -35,14 +35,18 @@ export const POST = protectedRoute(async (req) => {
   const body = await parseBody(req, schema);
 
   if (body.action === "propose") {
-    const created = await proposeNow();
-    // Y se valora acto seguido, igual que hace el cron. Proponer sin valorar
-    // deja el libro con operaciones y sin un solo punto de curva: fue
-    // exactamente lo que paso el primer dia (2 ordenes, 0 marcas). La curva
-    // tiene que empezar en el momento de la primera operacion, no en la
-    // siguiente pasada del reloj.
+    // VISTA PREVIA. El boton enseña lo que el oraculo haria ahora mismo; quien
+    // escribe en el libro es el reloj, a su hora, una vez al dia.
+    //
+    // No es prudencia de mas. El boton escribiendo fue la causa directa de que
+    // la escalera soltara cuatro tramos entre el 12 y el 14 de septiembre —tres
+    // de ellos a golpe de boton, dos con menos de siete horas de diferencia— y
+    // dejara los dos libros invertidos al 100% a precios separados por un 0,5%.
+    // Un instrumento que se mueve cada vez que lo miras no mide nada.
+    const preview = await proposeNow(Date.now(), { commit: false });
+    // Valorar si se puede: es barato y no altera el experimento.
     const equity = await markNow().catch(() => null);
-    return Response.json({ created, equity, asOf: Date.now() });
+    return Response.json({ created: [], preview, equity, asOf: Date.now() });
   }
   if (body.action === "mark") {
     return Response.json({ equity: await markNow(), asOf: Date.now() });

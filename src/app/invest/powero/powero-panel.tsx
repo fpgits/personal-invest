@@ -3,14 +3,15 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { Check, RefreshCw, X } from "lucide-react";
-import type { Book, BookMark, Order } from "@/lib/powero";
-import { MAX_SYMBOL_PCT, MAX_TICKET_PCT, minTicket } from "@/lib/powero";
+import type { Attribution, Book, BookMark, Order } from "@/lib/powero";
+import { LADDER_RUNG_PCT, LADDER_STEP_PCT, MAX_TICKET_PCT, minTicket } from "@/lib/powero";
 import type { PoweroSettings } from "@/lib/powero-settings";
 import { api, cn, fmtDate } from "@/lib/utils";
 
 type State = {
   settings: PoweroSettings;
   marks: Record<Book, BookMark>;
+  attribution: Record<Book, Attribution>;
   orders: Order[];
   pending: Order[];
   curve: Array<{ at: number; equity: number; book: string }>;
@@ -44,6 +45,75 @@ function clockLine(clock: State["clock"], now: number): string {
   const next = clock.nextProposeAt ?? 0;
   const cita = next <= now ? "en la próxima pasada (22:05 UTC)" : `no antes de ${when(next)}`;
   return `Oráculo: última corrida ${when(clock.lastProposeAt)} · siguiente ${cita}. Valoración: ${when(clock.lastMarkAt)}.`;
+}
+
+const pp = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(2)} pp`;
+
+/**
+ * De dónde sale el resultado del libro.
+ *
+ * La tabla de posiciones de arriba enseña cuánto se mueve cada activo sobre sí
+ * mismo, y eso engaña: un −3% en algo que pesa el 5% cuesta 0,15 puntos y el
+ * mismo −3% en algo que pesa la mitad del libro cuesta 1,5. Aquí se ordena por
+ * lo que de verdad duele, y la línea de arriba dice cuánto de todo eso es el
+ * mercado y cuánto es el oráculo.
+ */
+function Attribution({ a }: { a: Attribution }) {
+  if (a.lines.length === 0) return null;
+  const peor = a.lines[0];
+  return (
+    <div className="mt-3 border-t border-border pt-2">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
+        <span>
+          <span className="text-faint">el libro</span>{" "}
+          <span className={a.pnlPct >= 0 ? "text-up" : "text-down"}>{pct(a.pnlPct)}</span>
+        </span>
+        <span>
+          <span className="text-faint">el índice</span>{" "}
+          {a.benchPct === null ? "–" : <span className="text-muted">{pct(a.benchPct)}</span>}
+        </span>
+        <span>
+          <span className="text-faint">diferencia</span>{" "}
+          {a.gapPct === null ? (
+            "–"
+          ) : (
+            <span className={cn("font-semibold", a.gapPct >= 0 ? "text-up" : "text-down")}>{pp(a.gapPct)}</span>
+          )}
+        </span>
+      </div>
+      <table className="mt-2 w-full text-xs">
+        <thead>
+          <tr className="border-b border-border text-left text-faint">
+            <th className="py-1 font-normal">Aporta</th>
+            <th className="py-1 text-right font-normal">Peso</th>
+            <th className="py-1 text-right font-normal">Se mueve</th>
+            <th className="py-1 text-right font-normal">Puntos del libro</th>
+          </tr>
+        </thead>
+        <tbody>
+          {a.lines.map((l) => (
+            <tr key={l.symbol} className="border-b border-border last:border-0">
+              <td className="py-1.5 font-semibold">{l.symbol}</td>
+              <td className="py-1.5 text-right text-muted">{l.weightPct.toFixed(0)}%</td>
+              <td className={cn("py-1.5 text-right", l.pnlPct >= 0 ? "text-up" : "text-down")}>{pct(l.pnlPct)}</td>
+              <td
+                className={cn("py-1.5 text-right font-semibold", l.contributionPct >= 0 ? "text-up" : "text-down")}
+              >
+                {pp(l.contributionPct)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {peor.contributionPct < 0 && (
+        <p className="mt-1.5 text-[10px] text-faint">
+          {peor.symbol} explica {Math.abs((peor.contributionPct / (a.pnlPct || peor.contributionPct)) * 100).toFixed(0)}
+          % del resultado del libro. Con {a.lines.length} posiciones, una sola línea puede mover la curva entera:
+          leer la curva como veredicto del motor con tan pocos nombres es leer ruido.
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Etiqueta pequeña en mayúsculas: el pegamento visual de toda la pantalla. */
@@ -149,6 +219,8 @@ export function PoweroPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [capital, setCapital] = useState<{ equity: string; crypto: string } | null>(null);
+  /** Lo que el oráculo haría ahora. No está en el libro y puede no llegar a estarlo. */
+  const [preview, setPreview] = useState<Order[] | null>(null);
 
   async function post(body: Record<string, unknown>, tag: string) {
     setBusy(tag);
@@ -159,10 +231,21 @@ export function PoweroPanel() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = (await res.json()) as { error?: string; created?: Order[] };
+      const json = (await res.json()) as { error?: string; created?: Order[]; preview?: Order[] };
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-      if (json.created) {
-        setMsg(json.created.length === 0 ? "Ninguna señal supera el umbral ahora mismo." : `${json.created.length} propuestas nuevas.`);
+      if (json.preview) {
+        setPreview(json.preview);
+        setMsg(
+          json.preview.length === 0
+            ? "Ninguna señal supera el umbral ahora mismo."
+            : `${json.preview.length} señales vivas. Las apunta el reloj en su cita, no este botón.`,
+        );
+      } else if (json.created) {
+        setMsg(
+          json.created.length === 0
+            ? "Ninguna señal supera el umbral ahora mismo."
+            : `${json.created.length} propuestas nuevas.`,
+        );
       }
       await mutate();
     } catch (e) {
@@ -234,7 +317,7 @@ export function PoweroPanel() {
             className="flex items-center gap-1.5 border border-border-strong px-3 py-1.5 text-xs transition hover:bg-surface-2 disabled:opacity-40"
           >
             <RefreshCw size={11} className={cn(busy === "propose" && "animate-spin")} />
-            {busy === "propose" ? "Leyendo el motor…" : "Buscar señales"}
+            {busy === "propose" ? "Leyendo el motor…" : "Ver qué haría ahora"}
           </button>
           <button
             onClick={() => post({ action: "mark" }, "mark")}
@@ -266,6 +349,37 @@ export function PoweroPanel() {
       </div>
 
       {error && <div className="border border-border bg-surface p-5 text-sm text-down">{(error as Error).message}</div>}
+
+      {/* Vista previa: lo que el oráculo haría ahora. NO está en el libro. */}
+      {preview !== null && preview.length > 0 && (
+        <div className="border border-dashed border-border-strong bg-surface">
+          <div className="flex items-center justify-between border-b border-border px-5 py-3">
+            <Label>Lo que haría ahora · {preview.length} · no está en el libro</Label>
+            <button onClick={() => setPreview(null)} className="text-[10px] text-faint hover:text-text">
+              cerrar
+            </button>
+          </div>
+          <ul className="divide-y divide-border">
+            {preview.map((o, i) => (
+              <li key={`${o.symbol}-${o.side}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2 text-xs">
+                <span className={cn("w-12 font-semibold", o.side === "buy" ? "text-up" : "text-down")}>
+                  {o.side === "buy" ? "COMPRA" : "VENDE"}
+                </span>
+                <span className="w-16 font-semibold">{o.symbol}</span>
+                <span className="w-20 text-right">{money(o.amount)}</span>
+                <span className="w-20 text-right text-muted">a {money(o.price)}</span>
+                <span className="min-w-40 flex-1 truncate text-faint" title={o.reason}>
+                  {o.source} · {o.reason}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="border-t border-border px-5 py-2 text-[10px] text-faint">
+            Esto es un cálculo, no una operación. El reloj vuelve a evaluarlo en su cita y con los precios de
+            entonces; puede salir distinto o no salir. Mirar el experimento no puede cambiarlo.
+          </p>
+        </div>
+      )}
 
       {/* Curva */}
       <div className="border border-border bg-surface p-5">
@@ -337,6 +451,8 @@ export function PoweroPanel() {
               ) : (
                 <p className="mt-3 text-xs text-faint">Sin posiciones. Todo el capital en efectivo.</p>
               )}
+
+              {data?.attribution?.[book] && <Attribution a={data.attribution[book]} />}
 
               <div className="mt-3 flex items-center gap-2 border-t border-border pt-2">
                 <input
@@ -467,7 +583,9 @@ export function PoweroPanel() {
       <p className="px-1 pt-2 text-[10px] leading-relaxed text-faint">
         PoWERo no coloca órdenes. Ni en automático. Lleva un libro de mentira con tu capital nocional para medir
         si el motor acierta, con precios reales y sin arriesgar un dólar. Tope por idea {MAX_TICKET_PCT}% del
-        libro, tope por activo {MAX_SYMBOL_PCT}%.
+        libro. La escalera cripto entra por tramos del {LADDER_RUNG_PCT}% del objetivo y el siguiente tramo exige
+        que el precio esté un {LADDER_STEP_PCT}% por debajo del coste medio: sin esa segunda condición se llena la
+        posición entera el primer día y deja de ser una escalera.
       </p>
     </div>
   );

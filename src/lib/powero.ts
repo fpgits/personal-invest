@@ -174,6 +174,16 @@ export type Signal = {
    * que falta para llegar, no la misma cifra una y otra vez.
    */
   targetPct?: number;
+  /**
+   * Marca la senal como escalera, que se llena por TRAMOS y no de una vez.
+   *
+   * La diferencia no es cosmetica. El plan de bolsa es un reparto objetivo:
+   * si dice 14% en MSFT, comprar el hueco entero de golpe ES la instruccion.
+   * La escalera dice lo contrario — "compra mas segun siga cayendo" — y
+   * comprarle el hueco entero al primer aviso la convierte en una compra a
+   * secas que ademas gasta toda la munición al precio mas alto del tramo.
+   */
+  laddered?: boolean;
   price: number | null;
   reason: string;
   source: string;
@@ -193,6 +203,30 @@ export const MIN_TICKET_FLOOR = 1;
 /** Tope de exposicion por simbolo, en % del libro. */
 export const MAX_SYMBOL_PCT = 35;
 
+/**
+ * Cuanto del objetivo entra en UN tramo de la escalera. Cuatro tramos para
+ * llenar una posicion.
+ *
+ * Medido en el libro real: entre el 12 y el 14 de septiembre la escalera solto
+ * cuatro tramos y el ultimo metio 413$ en BTC a 77.630 cuando el coste medio
+ * de lo ya comprado era 77.229. Compro MAS caro despues de tres avisos, que es
+ * exactamente lo contrario de lo que promete una escalera, y dejo el libro sin
+ * efectivo en 48 horas. Con tramos del 25% eso no cabe.
+ */
+export const LADDER_RUNG_PCT = 25;
+/**
+ * Cuanto tiene que caer el precio POR DEBAJO del coste medio para que se suelte
+ * el tramo siguiente.
+ *
+ * Este es el freno que faltaba. La condicion de la escalera ("38% bajo maximos,
+ * 75 dias sin minimos nuevos") se mantiene verdadera durante semanas: sin este
+ * segundo requisito, cada pasada del reloj vuelve a comprar aunque el precio no
+ * se haya movido, y llenar la posicion depende de cuantas veces corre el cron y
+ * no de cuanto ha caido el activo. Un 5% por tramo significa que llenar los
+ * cuatro exige ~15% de caida adicional, que es para lo que existe la escalera.
+ */
+export const LADDER_STEP_PCT = 5;
+
 /** El ticket minimo de un libro, en dolares. Puro. */
 export function minTicket(equity: number): number {
   return Math.max(MIN_TICKET_FLOOR, round2((equity * MIN_TICKET_PCT) / 100));
@@ -210,8 +244,13 @@ export function ticketFor(args: {
   cash: number;
   alreadyInSymbol: number;
   targetPct?: number;
+  laddered?: boolean;
+  /** Precio de ahora. Solo lo mira la escalera, para exigir que haya caido. */
+  price?: number | null;
+  /** Coste medio de lo que ya hay. Solo lo mira la escalera. */
+  avgPrice?: number | null;
 }): number {
-  const { strength, equity, cash, alreadyInSymbol, targetPct } = args;
+  const { strength, equity, cash, alreadyInSymbol, targetPct, laddered, price, avgPrice } = args;
   if (equity <= 0 || cash <= 0) return 0;
 
   // Con objetivo del plan se compra el HUECO que falta para llegar a el.
@@ -222,8 +261,30 @@ export function ticketFor(args: {
   // debe hacer: si dice 60% BTC, se mide el 60% BTC.
   if (isFin(targetPct) && targetPct > 0) {
     const target = (equity * Math.min(100, targetPct)) / 100;
-    const gap = Math.min(Math.max(0, target - alreadyInSymbol), cash);
-    return gap >= minTicket(equity) ? round2(gap) : 0;
+    const remaining = Math.max(0, target - alreadyInSymbol);
+    if (remaining <= 0) return 0;
+    if (!laddered) {
+      const gap = Math.min(remaining, cash);
+      return gap >= minTicket(equity) ? round2(gap) : 0;
+    }
+
+    // Escalera: el objetivo es el mismo, pero se llega por tramos y solo
+    // cuando el precio acompaña.
+    //
+    // Si ya hay posicion, el tramo siguiente exige que el precio este por
+    // debajo del coste medio. Promediar a la BAJA es la tesis entera; sin esta
+    // linea la escalera promedia hacia donde vaya el mercado, que es lo mismo
+    // que no tener escalera y encima gastar la munición antes de la caida.
+    const held = alreadyInSymbol > 0 && isFin(avgPrice) && avgPrice > 0;
+    if (held) {
+      if (!isFin(price) || price <= 0) return 0;
+      if (price > avgPrice * (1 - LADDER_STEP_PCT / 100)) return 0;
+    }
+    const rung = (target * LADDER_RUNG_PCT) / 100;
+    // El ultimo tramo se lleva el resto: si no, queda una astilla por debajo
+    // del ticket minimo que ya no entra nunca y el objetivo no se cumple.
+    const size = Math.min(remaining <= rung * 1.5 ? remaining : rung, cash);
+    return size >= minTicket(equity) ? round2(size) : 0;
   }
 
   const byStrength = (equity * MAX_TICKET_PCT * Math.max(0, Math.min(100, strength))) / 10000;
@@ -248,6 +309,7 @@ export function propose(args: {
   const { state, mark, signals, now, makeId } = args;
   const valueOf = new Map(mark.lines.map((l) => [l.symbol, l.value]));
   const qtyOf = new Map(state.positions.map((p) => [p.symbol, p.qty]));
+  const avgOf = new Map(state.positions.map((p) => [p.symbol, p.avgPrice]));
   let cash = state.cash;
   const out: Order[] = [];
 
@@ -278,11 +340,21 @@ export function propose(args: {
       cash,
       alreadyInSymbol: valueOf.get(s.symbol) ?? 0,
       targetPct: s.targetPct,
+      laddered: s.laddered,
+      price: s.price,
+      avgPrice: avgOf.get(s.symbol) ?? null,
     });
     if (amount <= 0) continue;
+    const qty = amount / s.price;
     cash -= amount;
     valueOf.set(s.symbol, (valueOf.get(s.symbol) ?? 0) + amount);
-    out.push(order(makeId(), state.book, s, "buy", amount / s.price, s.price, amount, now));
+    // El coste medio se actualiza DENTRO de la pasada: sin esto, dos senales
+    // del mismo simbolo en la misma corrida verian las dos el coste viejo.
+    const prevQty = qtyOf.get(s.symbol) ?? 0;
+    const prevAvg = avgOf.get(s.symbol) ?? 0;
+    qtyOf.set(s.symbol, prevQty + qty);
+    avgOf.set(s.symbol, (prevQty * prevAvg + amount) / (prevQty + qty));
+    out.push(order(makeId(), state.book, s, "buy", qty, s.price, amount, now));
   }
   return out;
 }
@@ -436,9 +508,79 @@ export function signalFromLadder(l: {
     side: "buy",
     strength: Math.round(share * 100),
     targetPct: share * 100,
+    // Por tramos, no de una vez: ver LADDER_RUNG_PCT y LADDER_STEP_PCT.
+    laddered: true,
     price: l.price,
     reason: l.reason,
     source: "escalera",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// De donde sale el resultado
+
+/**
+ * Atribucion: de que linea viene el resultado del libro y cuanto se le saca —
+ * o se le pierde — al indice.
+ *
+ * Existe porque "vamos a perdida" no es una respuesta, es el principio de una
+ * pregunta, y hasta ahora contestarla exigia reconstruir el libro a mano desde
+ * las ordenes. Las dos cifras que importan son estas: cuanto aporta cada
+ * posicion al resultado (en puntos del libro, no en % de si misma, que es lo
+ * que engaña) y cuanto de ese resultado es del mercado y no del oraculo.
+ *
+ * Una caida de un 3% en algo que pesa el 5% del libro cuesta 0,15 puntos; la
+ * misma caida en algo que pesa el 50% cuesta 1,5. La columna de % por posicion
+ * las enseña iguales. Puro.
+ */
+export type Attribution = {
+  book: Book;
+  initial: number;
+  equity: number;
+  pnlPct: number;
+  /** El mismo dinero, el mismo dia, en el indice. Null si aun no hay linea. */
+  bench: number | null;
+  benchPct: number | null;
+  /** Puntos porcentuales de ventaja (o desventaja) contra el indice. */
+  gapPct: number | null;
+  lines: Array<{
+    symbol: string;
+    cost: number;
+    value: number;
+    pnl: number;
+    /** Lo que se mueve la posicion, sobre su propio coste. */
+    pnlPct: number;
+    /** Puntos del LIBRO que aporta. La suma es el resultado del libro. */
+    contributionPct: number;
+    /** Peso sobre el patrimonio del libro, en %. */
+    weightPct: number;
+  }>;
+};
+
+export function attribute(mark: BookMark, bench: number | null): Attribution {
+  const base = mark.initial > 0 ? mark.initial : 0;
+  const benchPct = bench !== null && base > 0 ? round2(((bench - base) / base) * 100) : null;
+  const pnlPct = base > 0 ? round2((mark.pnl / base) * 100) : 0;
+  return {
+    book: mark.book,
+    initial: mark.initial,
+    equity: mark.equity,
+    pnlPct,
+    bench,
+    benchPct,
+    gapPct: benchPct === null ? null : round2(pnlPct - benchPct),
+    lines: mark.lines
+      .map((l) => ({
+        symbol: l.symbol,
+        cost: round2(l.cost),
+        value: l.value,
+        pnl: l.pnl,
+        pnlPct: l.pnlPct,
+        contributionPct: base > 0 ? round2((l.pnl / base) * 100) : 0,
+        weightPct: mark.equity > 0 ? round1((l.value / mark.equity) * 100) : 0,
+      }))
+      // Lo que mas duele arriba: es la lista que se lee cuando algo va mal.
+      .sort((a, b) => a.contributionPct - b.contributionPct),
   };
 }
 

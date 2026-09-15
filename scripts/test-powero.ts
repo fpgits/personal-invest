@@ -3,6 +3,7 @@
  * Correr con: npm run test:powero
  */
 import {
+  attribute,
   buildBook,
   markBook,
   propose,
@@ -12,6 +13,8 @@ import {
   signalFromVerdict,
   minTicket,
   ticketFor,
+  LADDER_RUNG_PCT,
+  LADDER_STEP_PCT,
   MAX_SYMBOL_PCT,
   MAX_TICKET_PCT,
   MIN_TICKET_FLOOR,
@@ -361,6 +364,91 @@ console.log("\n# el libro nunca se queda en negativo");
     "al dia siguiente si se vuelve a proponer",
   );
   truthy(PROPOSE_MIN_GAP_MS > MARK_MIN_GAP_MS, "se valora mas a menudo de lo que se propone");
+}
+
+// --- La escalera tiene que ser una escalera ---
+//
+// Reproduce lo que paso de verdad entre el 12 y el 14 de septiembre: la misma
+// senal, la misma condicion verdadera durante dias, y el precio SIN caer.
+console.log("\n# la escalera: por tramos y solo si sigue cayendo");
+{
+  // Primer tramo: no hay posicion, no hay nada que exigir. Entra un cuarto.
+  const primero = ticketFor({ strength: 60, equity: 1000, cash: 1000, alreadyInSymbol: 0, targetPct: 60, laddered: true, price: 77_200, avgPrice: null });
+  eq(primero, (1000 * 60 * LADDER_RUNG_PCT) / 10000, `el primer tramo es el ${LADDER_RUNG_PCT}% del objetivo (${primero}$ de 600$)`);
+
+  // Segundo tramo al MISMO precio: esto es exactamente lo que ocurrio.
+  const plano = ticketFor({ strength: 60, equity: 1000, cash: 850, alreadyInSymbol: 150, targetPct: 60, laddered: true, price: 77_200, avgPrice: 77_200 });
+  eq(plano, 0, "sin caida no hay tramo nuevo: el precio no se ha movido");
+
+  // Y lo que hizo el cuarto tramo real: comprar MAS CARO que el coste medio.
+  const masCaro = ticketFor({ strength: 60, equity: 1000, cash: 850, alreadyInSymbol: 150, targetPct: 60, laddered: true, price: 77_630, avgPrice: 77_229 });
+  eq(masCaro, 0, "y por encima del coste medio, menos todavia (era el caso real del 14/09)");
+
+  // Con la caida exigida, si.
+  const caido = 77_200 * (1 - LADDER_STEP_PCT / 100);
+  const segundo = ticketFor({ strength: 60, equity: 1000, cash: 850, alreadyInSymbol: 150, targetPct: 60, laddered: true, price: caido, avgPrice: 77_200 });
+  truthy(segundo > 0, `a un ${LADDER_STEP_PCT}% por debajo del coste medio si entra (${segundo}$)`);
+
+  // El ultimo tramo se lleva el resto y no deja astilla.
+  const ultimo = ticketFor({ strength: 60, equity: 1000, cash: 500, alreadyInSymbol: 460, targetPct: 60, laddered: true, price: 60_000, avgPrice: 70_000 });
+  eq(ultimo, 140, "el ultimo tramo cierra el objetivo entero, sin dejar un resto que ya no entraria");
+
+  // Y el plan de bolsa NO es una escalera: ahi el hueco entero es la instruccion.
+  const bolsa = ticketFor({ strength: 70, equity: 1000, cash: 1000, alreadyInSymbol: 0, targetPct: 50 });
+  eq(bolsa, 500, "el plan de bolsa sigue comprando el hueco entero: es un reparto objetivo, no una escalera");
+}
+
+console.log("\n# cuatro pasadas seguidas no llenan la posicion");
+{
+  // La prueba que importa: repetir la senal, con el precio quieto, no puede
+  // gastar el libro. Antes gastaba los 1.000 en cuatro pulsaciones.
+  let orders: Order[] = [];
+  let state = buildBook("crypto", 1000, orders);
+  seq = 0;
+  for (let i = 0; i < 6; i++) {
+    const mark = markBook(state, { BTC: 77_200 });
+    const props = propose({
+      state,
+      mark,
+      signals: [
+        {
+          book: "crypto", symbol: "BTC", side: "buy", strength: 60, targetPct: 60, laddered: true,
+          price: 77_200, reason: "", source: "escalera",
+        },
+      ],
+      now: 1000 + i,
+      makeId,
+    });
+    orders = [...orders, ...props.map((p) => ({ ...p, status: "executed" as const, decidedAt: p.proposedAt }))];
+    state = buildBook("crypto", 1000, orders);
+  }
+  eq(orders.length, 1, "seis pasadas al mismo precio producen UN tramo, no seis");
+  truthy(state.cash > 800, `y el libro conserva munición (${state.cash}$ de 1.000$)`);
+}
+
+// --- Atribucion: de donde sale el resultado ---
+console.log("\n# la atribucion separa el mercado del oraculo");
+{
+  // Los numeros reales del libro de bolsa el 15/09/2026.
+  const orders: Order[] = [
+    ord({ symbol: "MSFT", side: "buy", qty: 1.023949, price: 495.63, amount: 507.5, status: "executed" }),
+    ord({ symbol: "AMZN", side: "buy", qty: 1.917984, price: 256.78, amount: 492.5, status: "executed" }),
+  ];
+  const mark = markBook(buildBook("equity", 1000, orders), { MSFT: 496.54, AMZN: 247.83 });
+  const a = attribute(mark, 990.55);
+
+  eq(a.pnlPct, -1.62, "el libro pierde un 1,62%");
+  eq(a.benchPct, -0.95, "y el indice un 0,95%");
+  eq(a.gapPct, -0.67, "asi que el oraculo va 0,67 puntos POR DEBAJO de no hacer nada");
+  eq(a.lines[0].symbol, "AMZN", "lo que mas duele, primero");
+  eq(a.lines[0].contributionPct, -1.72, "AMZN se lleva 1,72 puntos del libro");
+  truthy(a.lines[1].contributionPct > 0, "y MSFT aporta en positivo");
+  // La suma tiene que cuadrar con el resultado: si no, la tabla miente.
+  const suma = a.lines.reduce((s, l) => s + l.contributionPct, 0);
+  truthy(Math.abs(suma - a.pnlPct) < 0.02, `las aportaciones suman el resultado (${suma.toFixed(2)} vs ${a.pnlPct})`);
+
+  // Sin linea de indice todavia, la atribucion no inventa una diferencia.
+  eq(attribute(mark, null).gapPct, null, "sin indice no hay diferencia que contar");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);
