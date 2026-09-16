@@ -3,6 +3,7 @@
  * Correr con: npm run test:universe
  */
 import { coverageFromView, yearsToSweep, DEFAULT_YEARS, REQUESTS_PER_SECOND } from "../src/lib/universe-run";
+import { sweepDue, MIN_BUDGET_MS } from "../src/lib/universe-tick";
 import { FRAME_CONCEPTS } from "../src/lib/edgar-frames";
 import type { FinancialsView, FinancialYear } from "../src/lib/edgar-facts";
 
@@ -75,6 +76,18 @@ console.log("\n# quien entra en el ranking y quien no");
   // frontera se mueve sola cada 1 de enero sin que nadie lo note.
   truthy(coverageFromView(view([2021, 2022, 2023]), 9, AHORA).usable, "ultimo ejercicio 2023: aun cuenta");
   truthy(!coverageFromView(view([2020, 2021, 2022]), 9, AHORA).usable, "ultimo ejercicio 2022: ya no");
+}
+
+console.log("\n# el reloj del barrido: una vez al dia, cuelgue de donde cuelgue");
+{
+  truthy(sweepDue(null, AHORA), "sin pasada previa, toca");
+  truthy(!sweepDue("2026-09-14", AHORA), "barrido hoy: no se repite aunque el cron pase cuatro veces");
+  truthy(sweepDue("2026-09-13", AHORA), "barrido ayer: hoy toca otra vez");
+  // El dia cambia en UTC, que es el reloj de los crons de Vercel.
+  const casiMedianoche = Date.parse("2026-09-14T23:59:59Z");
+  truthy(!sweepDue("2026-09-14", casiMedianoche), "a las 23:59 UTC sigue siendo hoy");
+  truthy(sweepDue("2026-09-14", casiMedianoche + 1000), "un segundo despues ya es mañana");
+  truthy(MIN_BUDGET_MS >= 60_000, "no se arranca un barrido con menos de un minuto por delante");
 }
 
 console.log(`\n${checks} comprobaciones, ${failures} fallos`);
